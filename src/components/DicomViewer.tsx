@@ -410,127 +410,124 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
       />
       </div>
 
-      <div className="bg-neutral-900/80 backdrop-blur-sm text-neutral-100 p-2 border-t border-neutral-800 flex-shrink-0" style={{ paddingBottom: `calc(0.5rem + env(safe-area-inset-bottom))` }}>
-        <div className="flex items-center justify-between mb-1.5">
+      <div className="bg-neutral-900/60 backdrop-blur-sm text-neutral-100 border-t border-neutral-800 flex-shrink-0" style={{ paddingBottom: `calc(0.25rem + env(safe-area-inset-bottom))` }}>
+        <div className="p-1.5">
+          <div className="flex items-center justify-between mb-1">
           <div className="flex items-center">
             <button
               onClick={prevImage}
               disabled={currentImageIndex === 0 || isPlaying || imageCount === 0}
-              className="flex items-center justify-center w-8 h-8 bg-neutral-800 hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200 rounded-l border border-r-0 border-neutral-700 hover:border-neutral-600 disabled:border-neutral-800"
+              className="flex items-center justify-center w-7 h-7 bg-neutral-800/70 hover:bg-neutral-700 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 rounded-l border border-r-0 border-neutral-700/50"
             >
-              <SkipBack size={14} />
+              <SkipBack size={12} />
             </button>
 
             <button
               onClick={togglePlayback}
               disabled={imageCount <= 1}
-              className={`flex items-center justify-center w-10 h-8 border transition-all duration-200 ${
+              className={`flex items-center justify-center w-8 h-7 border transition-all duration-200 ${
                 imageCount <= 1
-                  ? 'bg-neutral-800 text-neutral-500 border-neutral-700 cursor-not-allowed'
-                  : 'bg-neutral-700 hover:bg-neutral-600 border-neutral-600 hover:border-neutral-500'
+                  ? 'bg-neutral-800/30 text-neutral-500 border-neutral-700/50 cursor-not-allowed'
+                  : 'bg-neutral-700/70 hover:bg-neutral-600 border-neutral-600/50'
               }`}
             >
-              {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+              {isPlaying ? <Pause size={12} /> : <Play size={12} />}
             </button>
 
             <button
               onClick={nextImage}
               disabled={currentImageIndex === imageCount - 1 || isPlaying || imageCount === 0}
-              className="flex items-center justify-center w-8 h-8 bg-neutral-800 hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200 rounded-r border border-l-0 border-neutral-700 hover:border-neutral-600 disabled:border-neutral-800"
+              className="flex items-center justify-center w-7 h-7 bg-neutral-800/70 hover:bg-neutral-700 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 rounded-r border border-l-0 border-neutral-700/50"
             >
-              <SkipForward size={14} />
+              <SkipForward size={12} />
             </button>
           </div>
 
-          <div className="text-center flex-1 mx-3 overflow-hidden">
-            {normalizedSeriesName ? (
-              <div className="text-xs text-neutral-400 uppercase tracking-wide truncate">
-                {normalizedSeriesName}
+            <div className="text-center flex-1 mx-2 overflow-hidden">
+              <div className="text-xs font-medium text-neutral-200">
+                {imageCount === 0 ? '0/0' : `${currentImageIndex + 1}/${imageCount}`}
               </div>
-            ) : null}
-            <div className="text-sm font-semibold text-neutral-100">
-              {imageCount === 0 ? '0 / 0' : `${currentImageIndex + 1} / ${imageCount}`}
+              <div className="text-xs text-neutral-400">
+                {imageCount > 0 ? Math.round(((currentImageIndex + 1) / imageCount) * 100) : 0}%
+              </div>
             </div>
-            <div className="text-xs text-neutral-400">
-              {imageCount > 0 ? Math.round(((currentImageIndex + 1) / imageCount) * 100) : 0}% {isPlaying && `• ${playSpeed}fps`}
-            </div>
-          </div>
-
-          <div className="w-16"></div>
         </div>
 
-        <div className="w-full mb-1.5">
-          <input
-            type="range"
-            min="0"
-            max={Math.max(0, imageCount - 1)}
-            value={currentImageIndex}
-            onChange={(e) => !isPlaying && goToImage(parseInt(e.target.value))}
-            disabled={isPlaying || imageCount === 0}
-            className="w-full h-1.5 bg-neutral-800 rounded-lg appearance-none cursor-pointer"
-            style={{
-              background:
-                imageCount > 0
-                  ? `linear-gradient(to right, #525252 0%, #525252 ${((currentImageIndex + 1) / imageCount) * 100}%, #404040 ${((currentImageIndex + 1) / imageCount) * 100}%, #404040 100%)`
-                  : undefined
-            }}
-          />
-        </div>
-
-        <div className="md:flex md:items-center md:justify-between">
-          <div className="flex items-center gap-1 mb-1 md:mb-0">
-            <span className="text-xs text-neutral-400">Speed:</span>
-            {[0.5, 1, 2, 5, 10].map(speed => (
-              <button
-                key={speed}
-                onClick={() => changePlaySpeed(speed)}
-                className={`px-1.5 py-0.5 text-xs rounded transition-all duration-200 ${
-                  playSpeed === speed
-                    ? 'bg-neutral-600 text-white'
-                    : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
-                }`}
-              >
-                {speed}fps
-              </button>
-            ))}
+          <div className="w-full mb-1">
+            <input
+              type="range"
+              min="0"
+              max={Math.max(0, imageCount - 1)}
+              value={currentImageIndex}
+              onChange={(e) => !isPlaying && goToImage(parseInt(e.target.value))}
+              disabled={isPlaying || imageCount === 0}
+              className="w-full h-1 bg-neutral-800/50 rounded-lg appearance-none cursor-pointer"
+              style={{
+                background:
+                  imageCount > 0
+                    ? `linear-gradient(to right, #525252 0%, #525252 ${((currentImageIndex + 1) / imageCount) * 100}%, #404040 ${((currentImageIndex + 1) / imageCount) * 100}%, #404040 100%)`
+                    : undefined
+              }}
+            />
           </div>
 
-          <div className="flex gap-0.5 justify-center md:justify-end">
-            <button
-              onClick={() => goToImage(0)}
-              disabled={isPlaying || imageCount === 0}
-              className="px-1.5 py-0.5 bg-neutral-800 text-neutral-200 rounded text-xs hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200"
-            >
-              First
-            </button>
-            <button
-              onClick={() => goToImage(Math.floor(imageCount / 4))}
-              disabled={isPlaying || imageCount === 0}
-              className="px-1.5 py-0.5 bg-neutral-800 text-neutral-200 rounded text-xs hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200"
-            >
-              25%
-            </button>
-            <button
-              onClick={() => goToImage(Math.floor(imageCount / 2))}
-              disabled={isPlaying || imageCount === 0}
-              className="px-1.5 py-0.5 bg-neutral-800 text-neutral-200 rounded text-xs hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200"
-            >
-              50%
-            </button>
-            <button
-              onClick={() => goToImage(Math.floor((imageCount * 3) / 4))}
-              disabled={isPlaying || imageCount === 0}
-              className="px-1.5 py-0.5 bg-neutral-800 text-neutral-200 rounded text-xs hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200"
-            >
-              75%
-            </button>
-            <button
-              onClick={() => goToImage(imageCount - 1)}
-              disabled={isPlaying || imageCount === 0}
-              className="px-1.5 py-0.5 bg-neutral-800 text-neutral-200 rounded text-xs hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200"
-            >
-              Last
-            </button>
+          <div className="overflow-x-auto scrollbar-hide">
+            <div className="flex items-center justify-between min-w-max gap-2">
+              <div className="flex items-center gap-0.5">
+                <span className="text-xs text-neutral-500">Speed:</span>
+                {[0.5, 1, 2, 5, 10].map(speed => (
+                  <button
+                    key={speed}
+                    onClick={() => changePlaySpeed(speed)}
+                    className={`px-1 py-0.5 text-xs rounded transition-all duration-200 ${
+                      playSpeed === speed
+                        ? 'bg-neutral-600/80 text-white'
+                        : 'bg-neutral-800/50 text-neutral-400 hover:bg-neutral-700/50'
+                    }`}
+                  >
+                    {speed}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex gap-0.5">
+                <button
+                  onClick={() => goToImage(0)}
+                  disabled={isPlaying || imageCount === 0}
+                  className="px-1 py-0.5 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200"
+                >
+                  First
+                </button>
+                <button
+                  onClick={() => goToImage(Math.floor(imageCount / 4))}
+                  disabled={isPlaying || imageCount === 0}
+                  className="px-1 py-0.5 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200"
+                >
+                  25%
+                </button>
+                <button
+                  onClick={() => goToImage(Math.floor(imageCount / 2))}
+                  disabled={isPlaying || imageCount === 0}
+                  className="px-1 py-0.5 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200"
+                >
+                  50%
+                </button>
+                <button
+                  onClick={() => goToImage(Math.floor((imageCount * 3) / 4))}
+                  disabled={isPlaying || imageCount === 0}
+                  className="px-1 py-0.5 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200"
+                >
+                  75%
+                </button>
+                <button
+                  onClick={() => goToImage(imageCount - 1)}
+                  disabled={isPlaying || imageCount === 0}
+                  className="px-1 py-0.5 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200"
+                >
+                  Last
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
