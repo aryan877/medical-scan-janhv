@@ -163,13 +163,23 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
       cornerstone.displayImage(element, image);
       cornerstone.resize(element, true);
 
+      // Get the element dimensions
+      const elementRect = element.getBoundingClientRect();
+      const elementWidth = elementRect.width;
+      const elementHeight = elementRect.height;
+
+      // Calculate scale to fit the entire image in the viewport
+      const scaleX = elementWidth / image.width;
+      const scaleY = elementHeight / image.height;
+      const fitScale = Math.min(scaleX, scaleY);
+
       // Set default viewport properties
       const windowCenter = image.windowCenter;
       const windowWidth = image.windowWidth;
 
       if (windowCenter !== undefined && windowWidth !== undefined) {
         cornerstone.setViewport(element, {
-          scale: 1,
+          scale: fitScale,
           translation: { x: 0, y: 0 },
           voi: {
             windowCenter,
@@ -179,7 +189,7 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
           pixelReplication: false,
           rotation: 0,
           hflip: false,
-          vflip: false
+          vflip: false  // Use default DICOM orientation from ImageOrientationPatient tag
         });
       }
     } catch (error) {
