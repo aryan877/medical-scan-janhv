@@ -159,39 +159,33 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
 
     try {
       const image = await cornerstone.loadImage(imageId);
-
       cornerstone.displayImage(element, image);
-      cornerstone.resize(element, true);
 
-      // Get the element dimensions
-      const elementRect = element.getBoundingClientRect();
-      const elementWidth = elementRect.width;
-      const elementHeight = elementRect.height;
+      // Create viewport that fits the image to the element
+      const enabledElement = cornerstone.getEnabledElement(element);
+      const canvas = enabledElement.canvas;
 
-      // Calculate scale to fit the entire image in the viewport
-      const scaleX = elementWidth / image.width;
-      const scaleY = elementHeight / image.height;
-      const fitScale = Math.min(scaleX, scaleY);
+      // Calculate scale to fit image in canvas
+      const scaleX = canvas.width / image.width;
+      const scaleY = canvas.height / image.height;
+      const scale = Math.min(scaleX, scaleY);
 
-      // Set default viewport properties
-      const windowCenter = image.windowCenter;
-      const windowWidth = image.windowWidth;
+      const viewport = {
+        scale,
+        translation: { x: 0, y: 0 },
+        voi: {
+          windowCenter: image.windowCenter,
+          windowWidth: image.windowWidth
+        },
+        invert: false,
+        pixelReplication: false,
+        rotation: 0,
+        hflip: false,
+        vflip: false
+      };
 
-      if (windowCenter !== undefined && windowWidth !== undefined) {
-        cornerstone.setViewport(element, {
-          scale: fitScale,
-          translation: { x: 0, y: 0 },
-          voi: {
-            windowCenter,
-            windowWidth
-          },
-          invert: false,
-          pixelReplication: false,
-          rotation: 0,
-          hflip: false,
-          vflip: false  // Use default DICOM orientation from ImageOrientationPatient tag
-        });
-      }
+      cornerstone.setViewport(element, viewport);
+
     } catch (error) {
       console.error('Failed to load DICOM image:', error);
     }
@@ -223,7 +217,33 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
             const element = elementRef.current;
             if (cornerstone && element) {
               cornerstone.resize(element, true);
-              loadImage(currentIndexRef.current);
+              // Re-apply viewport after resize
+              const enabledElement = cornerstone.getEnabledElement(element);
+              if (enabledElement && enabledElement.image) {
+                const canvas = enabledElement.canvas;
+                const image = enabledElement.image;
+
+                // Calculate scale to fit image in canvas
+                const scaleX = canvas.width / image.width;
+                const scaleY = canvas.height / image.height;
+                const scale = Math.min(scaleX, scaleY);
+
+                const viewport = {
+                  scale,
+                  translation: { x: 0, y: 0 },
+                  voi: {
+                    windowCenter: image.windowCenter,
+                    windowWidth: image.windowWidth
+                  },
+                  invert: false,
+                  pixelReplication: false,
+                  rotation: 0,
+                  hflip: false,
+                  vflip: false
+                };
+
+                cornerstone.setViewport(element, viewport);
+              }
             }
           } catch (error) {
             console.warn('Resize error:', error);
@@ -340,8 +360,10 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
     if (imageCount === 0) return;
 
     const clampedIndex = Math.max(0, Math.min(index, imageCount - 1));
-    setCurrentImageIndex(clampedIndex);
-  }, [imageCount]);
+    if (clampedIndex !== currentImageIndex) {
+      setCurrentImageIndex(clampedIndex);
+    }
+  }, [imageCount, currentImageIndex]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -399,59 +421,62 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
 
 
   return (
-    <div className="w-full h-full flex flex-col bg-neutral-950">
-      <div className="flex-1 bg-black relative min-h-0 rounded-lg overflow-hidden">
-      <div
-        ref={elementRef}
-        className="w-full h-full"
-        style={{ minHeight: '200px' }}
-        role="img"
-        aria-label={viewerLabel}
-      />
+    <div className="w-full h-full flex flex-col">
+      {/* Image viewer area */}
+      <div className="flex-1 bg-black">
+        <div
+          ref={elementRef}
+          className="w-full h-full"
+          role="img"
+          aria-label={viewerLabel}
+        />
       </div>
 
-      <div className="bg-neutral-900/60 backdrop-blur-sm text-neutral-100 border-t border-neutral-800 flex-shrink-0" style={{ paddingBottom: `calc(0.25rem + env(safe-area-inset-bottom))` }}>
-        <div className="p-1.5">
-          <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center">
-            <button
-              onClick={prevImage}
-              disabled={currentImageIndex === 0 || isPlaying || imageCount === 0}
-              className="flex items-center justify-center w-7 h-7 bg-neutral-800/70 hover:bg-neutral-700 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 rounded-l border border-r-0 border-neutral-700/50"
-            >
-              <SkipBack size={12} />
-            </button>
+      {/* Controls area */}
+      <div className="bg-neutral-900/95 backdrop-blur-sm text-neutral-100 border-t border-neutral-700/50 flex-shrink-0">
+        <div className="pb-safe">
+        <div className="p-2 space-y-2">
+          {/* Top row: Controls and counter */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={prevImage}
+                disabled={currentImageIndex === 0 || isPlaying || imageCount === 0}
+                className="flex items-center justify-center w-8 h-8 bg-neutral-800/70 hover:bg-neutral-700 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 rounded-l border border-r-0 border-neutral-700/50 touch-manipulation"
+              >
+                <SkipBack size={14} />
+              </button>
 
-            <button
-              onClick={togglePlayback}
-              disabled={imageCount <= 1}
-              className={`flex items-center justify-center w-8 h-7 border transition-all duration-200 ${
-                imageCount <= 1
-                  ? 'bg-neutral-800/30 text-neutral-500 border-neutral-700/50 cursor-not-allowed'
-                  : 'bg-neutral-700/70 hover:bg-neutral-600 border-neutral-600/50'
-              }`}
-            >
-              {isPlaying ? <Pause size={12} /> : <Play size={12} />}
-            </button>
+              <button
+                onClick={togglePlayback}
+                disabled={imageCount <= 1}
+                className={`flex items-center justify-center w-10 h-8 border transition-all duration-200 touch-manipulation ${
+                  imageCount <= 1
+                    ? 'bg-neutral-800/30 text-neutral-500 border-neutral-700/50 cursor-not-allowed'
+                    : 'bg-neutral-700/70 hover:bg-neutral-600 border-neutral-600/50'
+                }`}
+              >
+                {isPlaying ? <Pause size={14} /> : <Play size={14} />}
+              </button>
 
-            <button
-              onClick={nextImage}
-              disabled={currentImageIndex === imageCount - 1 || isPlaying || imageCount === 0}
-              className="flex items-center justify-center w-7 h-7 bg-neutral-800/70 hover:bg-neutral-700 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 rounded-r border border-l-0 border-neutral-700/50"
-            >
-              <SkipForward size={12} />
-            </button>
-          </div>
+              <button
+                onClick={nextImage}
+                disabled={currentImageIndex === imageCount - 1 || isPlaying || imageCount === 0}
+                className="flex items-center justify-center w-8 h-8 bg-neutral-800/70 hover:bg-neutral-700 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 rounded-r border border-l-0 border-neutral-700/50 touch-manipulation"
+              >
+                <SkipForward size={14} />
+              </button>
+            </div>
 
-            <div className="text-center flex-1 mx-2 overflow-hidden">
-              <div className="text-xs font-medium text-neutral-200">
+            <div className="text-center flex-shrink-0 ml-3">
+              <div className="text-sm font-medium text-neutral-200">
                 {imageCount === 0 ? '0/0' : `${currentImageIndex + 1}/${imageCount}`}
               </div>
               <div className="text-xs text-neutral-400">
                 {imageCount > 0 ? Math.round(((currentImageIndex + 1) / imageCount) * 100) : 0}%
               </div>
             </div>
-        </div>
+          </div>
 
           <div className="w-full mb-1">
             <input
@@ -459,9 +484,16 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
               min="0"
               max={Math.max(0, imageCount - 1)}
               value={currentImageIndex}
-              onChange={(e) => !isPlaying && goToImage(parseInt(e.target.value))}
+              onChange={(e) => {
+                if (!isPlaying) {
+                  const newIndex = parseInt(e.target.value);
+                  if (newIndex !== currentImageIndex) {
+                    goToImage(newIndex);
+                  }
+                }
+              }}
               disabled={isPlaying || imageCount === 0}
-              className="w-full h-1 bg-neutral-800/50 rounded-lg appearance-none cursor-pointer"
+              className="w-full h-1 bg-neutral-800/50 rounded-lg appearance-none cursor-pointer slider-optimized"
               style={{
                 background:
                   imageCount > 0
@@ -471,64 +503,52 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
             />
           </div>
 
+          {/* Bottom row: Speed and jump buttons - compact for mobile */}
           <div className="overflow-x-auto scrollbar-hide">
             <div className="flex items-center justify-between min-w-max gap-2">
-              <div className="flex items-center gap-0.5">
-                <span className="text-xs text-neutral-500">Speed:</span>
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-neutral-500 flex-shrink-0">Speed:</span>
                 {[0.5, 1, 2, 5, 10].map(speed => (
                   <button
                     key={speed}
                     onClick={() => changePlaySpeed(speed)}
-                    className={`px-1 py-0.5 text-xs rounded transition-all duration-200 ${
+                    className={`px-2 py-1 text-xs rounded transition-all duration-200 touch-manipulation ${
                       playSpeed === speed
                         ? 'bg-neutral-600/80 text-white'
                         : 'bg-neutral-800/50 text-neutral-400 hover:bg-neutral-700/50'
                     }`}
                   >
-                    {speed}
+                    {speed}x
                   </button>
                 ))}
               </div>
 
-              <div className="flex gap-0.5">
+              <div className="flex gap-1">
                 <button
                   onClick={() => goToImage(0)}
                   disabled={isPlaying || imageCount === 0}
-                  className="px-1 py-0.5 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200"
+                  className="px-2 py-1 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 touch-manipulation"
                 >
                   First
                 </button>
                 <button
-                  onClick={() => goToImage(Math.floor(imageCount / 4))}
-                  disabled={isPlaying || imageCount === 0}
-                  className="px-1 py-0.5 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200"
-                >
-                  25%
-                </button>
-                <button
                   onClick={() => goToImage(Math.floor(imageCount / 2))}
                   disabled={isPlaying || imageCount === 0}
-                  className="px-1 py-0.5 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200"
+                  className="px-2 py-1 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 touch-manipulation"
                 >
-                  50%
-                </button>
-                <button
-                  onClick={() => goToImage(Math.floor((imageCount * 3) / 4))}
-                  disabled={isPlaying || imageCount === 0}
-                  className="px-1 py-0.5 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200"
-                >
-                  75%
+                  Mid
                 </button>
                 <button
                   onClick={() => goToImage(imageCount - 1)}
                   disabled={isPlaying || imageCount === 0}
-                  className="px-1 py-0.5 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200"
+                  className="px-2 py-1 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 touch-manipulation"
                 >
                   Last
                 </button>
               </div>
             </div>
           </div>
+        </div>
         </div>
       </div>
     </div>
