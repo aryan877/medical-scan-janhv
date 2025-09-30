@@ -1,6 +1,13 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition
+} from 'react';
 import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 
 // Dynamic imports to avoid SSR issues
@@ -17,17 +24,70 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
   const elementRef = useRef<HTMLDivElement>(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isInitialized, setIsInitialized] = useState(false);
-  const [imageIds, setImageIds] = useState<string[]>([]);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playSpeed, setPlaySpeed] = useState(10);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const [isResizing, setIsResizing] = useState(false);
+  const playbackFrameRef = useRef<number | null>(null);
+  const resizeFrameRef = useRef<number | null>(null);
+  const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [, startTransition] = useTransition();
+  const imageIds = useMemo(() => dicomFiles.map(file => `wadouri:${file}`), [dicomFiles]);
+  const imageCount = imageIds.length;
+  const isPlayingRef = useRef(isPlaying);
+  const currentIndexRef = useRef(currentImageIndex);
+  const normalizedSeriesName = useMemo(
+    () => (seriesName ? seriesName.replace(/_/g, ' ').trim() : ''),
+    [seriesName]
+  );
+
+  const viewerLabel = useMemo(() => {
+    return normalizedSeriesName ? `${normalizedSeriesName} viewer` : 'DICOM viewer';
+  }, [normalizedSeriesName]);
 
   useEffect(() => {
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
+
+  useEffect(() => {
+    currentIndexRef.current = currentImageIndex;
+  }, [currentImageIndex]);
+
+  useEffect(() => {
+    // Reset playback state when series changes to avoid unintentional autoplay
+    setIsPlaying(false);
+    setCurrentImageIndex(0);
+  }, [dicomFiles]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    const viewerElement = elementRef.current;
+    let hasEnabledElement = false;
+
+    const enableElement = () => {
+      if (!cornerstone || !viewerElement || hasEnabledElement) return;
+      try {
+        cornerstone.enable(viewerElement);
+        hasEnabledElement = true;
+        if (!isCancelled) {
+          setIsInitialized(true);
+        }
+      } catch (error) {
+        const message = (error as Error)?.message || '';
+        if (message.includes('already been enabled')) {
+          hasEnabledElement = true;
+          if (!isCancelled) {
+            setIsInitialized(true);
+          }
+        } else {
+          console.error('Failed to enable Cornerstone element:', error);
+        }
+      }
+    };
+
     const initializeCornerstone = async () => {
       try {
-        // Only load libraries in the browser
-        if (typeof window !== 'undefined' && !cornerstone) {
+        if (typeof window === 'undefined') return;
+
+        if (!cornerstone) {
           const [
             cornerstoneModule,
             cornerstoneWADOImageLoaderModule,
@@ -52,12 +112,9 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
               use16BitDataType: true
             }
           });
-
-          if (elementRef.current) {
-            cornerstone.enable(elementRef.current);
-            setIsInitialized(true);
-          }
         }
+
+        enableElement();
       } catch (error) {
         console.error('Failed to initialize Cornerstone:', error);
       }
@@ -66,92 +123,100 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
     initializeCornerstone();
 
     return () => {
-      const element = elementRef.current;
-      if (element && cornerstone) {
+      isCancelled = true;
+
+      if (hasEnabledElement && viewerElement && cornerstone) {
         try {
-          cornerstone.disable(element);
+          cornerstone.disable(viewerElement);
         } catch (error) {
           console.warn('Failed to disable cornerstone element:', error);
         }
       }
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
+
+      if (playbackFrameRef.current !== null) {
+        cancelAnimationFrame(playbackFrameRef.current);
+        playbackFrameRef.current = null;
+      }
+
+      if (resizeFrameRef.current !== null) {
+        cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+        resizeTimeoutRef.current = null;
       }
     };
   }, []);
 
-  useEffect(() => {
-    if (dicomFiles.length > 0) {
-      const ids = dicomFiles.map(file => `wadouri:${file}`);
-      setImageIds(ids);
-    }
-  }, [dicomFiles]);
-
   const loadImage = useCallback(async (index: number) => {
-    if (!elementRef.current || !imageIds[index] || !cornerstone) return;
+    const element = elementRef.current;
+    if (!element || !cornerstone) return;
+
+    const imageId = imageIds[index];
+    if (!imageId) return;
 
     try {
-      const image = await cornerstone.loadImage(imageIds[index]);
-      cornerstone.displayImage(elementRef.current, image);
+      const image = await cornerstone.loadImage(imageId);
 
-      const enabledElement = cornerstone.getEnabledElement(elementRef.current);
-      const viewport = enabledElement.viewport;
+      cornerstone.displayImage(element, image);
+      cornerstone.resize(element, true);
 
-      const canvas = enabledElement.canvas;
-      const canvasWidth = canvas.width;
-      const canvasHeight = canvas.height;
+      // Set default viewport properties
+      const windowCenter = image.windowCenter;
+      const windowWidth = image.windowWidth;
 
-      const imageWidth = image.width;
-      const imageHeight = image.height;
-
-      const scaleX = canvasWidth / imageWidth;
-      const scaleY = canvasHeight / imageHeight;
-      const scale = Math.min(scaleX, scaleY);
-
-      cornerstone.setViewport(elementRef.current, {
-        ...viewport,
-        scale: scale,
-        translation: { x: 0, y: 0 },
-        voi: {
-          windowCenter: image.windowCenter || viewport.voi.windowCenter,
-          windowWidth: image.windowWidth || viewport.voi.windowWidth
-        }
-      });
+      if (windowCenter !== undefined && windowWidth !== undefined) {
+        cornerstone.setViewport(element, {
+          scale: 1,
+          translation: { x: 0, y: 0 },
+          voi: {
+            windowCenter,
+            windowWidth
+          },
+          invert: false,
+          pixelReplication: false,
+          rotation: 0,
+          hflip: false,
+          vflip: false
+        });
+      }
     } catch (error) {
       console.error('Failed to load DICOM image:', error);
     }
   }, [imageIds]);
 
   useEffect(() => {
-    if (isInitialized && imageIds.length > 0 && elementRef.current) {
+    if (isInitialized && imageCount > 0 && elementRef.current) {
       loadImage(currentImageIndex);
     }
-  }, [isInitialized, imageIds, currentImageIndex, loadImage]);
+  }, [isInitialized, imageCount, currentImageIndex, loadImage]);
+
+  useEffect(() => {
+    if (imageCount === 0) {
+      setCurrentImageIndex(0);
+    } else if (currentImageIndex >= imageCount) {
+      setCurrentImageIndex(imageCount - 1);
+    }
+  }, [currentImageIndex, imageCount]);
 
   useEffect(() => {
     const handleResize = () => {
-      if (elementRef.current && cornerstone && isInitialized && !isResizing) {
-        setIsResizing(true);
+      if (elementRef.current && cornerstone && isInitialized) {
+        if (resizeFrameRef.current !== null) {
+          cancelAnimationFrame(resizeFrameRef.current);
+        }
 
-        // Use requestAnimationFrame for better performance
-        requestAnimationFrame(() => {
+        resizeFrameRef.current = requestAnimationFrame(() => {
           try {
-            if (cornerstone && elementRef.current) {
-              // Force a slight delay to ensure DOM has updated
-              setTimeout(() => {
-                if (cornerstone && elementRef.current) {
-                  cornerstone.resize(elementRef.current);
-                  // Reload current image to ensure proper display
-                  if (imageIds.length > 0) {
-                    loadImage(currentImageIndex);
-                  }
-                }
-                setIsResizing(false);
-              }, 50);
+            const element = elementRef.current;
+            if (cornerstone && element) {
+              cornerstone.resize(element, true);
+              loadImage(currentIndexRef.current);
             }
           } catch (error) {
             console.warn('Resize error:', error);
-            setIsResizing(false);
           }
         });
       }
@@ -164,10 +229,11 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
     };
 
     // Use debounced resize handler
-    let resizeTimeout: NodeJS.Timeout;
     const debouncedResize = () => {
-      clearTimeout(resizeTimeout);
-      resizeTimeout = setTimeout(handleResize, 150);
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+      }
+      resizeTimeoutRef.current = setTimeout(handleResize, 150);
     };
 
     window.addEventListener('resize', debouncedResize);
@@ -185,74 +251,96 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
       window.removeEventListener('resize', debouncedResize);
       window.removeEventListener('orientationchange', handleOrientationChange);
       mediaQuery.removeEventListener('change', handleMediaChange);
-      clearTimeout(resizeTimeout);
-    };
-  }, [isInitialized, imageIds.length, currentImageIndex, loadImage, isResizing]);
-
-  // Playback interval effect
-  useEffect(() => {
-    if (isPlaying && imageIds.length > 1) {
-      intervalRef.current = setInterval(() => {
-        setCurrentImageIndex(prev => {
-          const next = prev + 1;
-          if (next >= imageIds.length) {
-            return 0; // Loop back to start
-          }
-          return next;
-        });
-      }, 1000 / playSpeed);
-    } else {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+        resizeTimeoutRef.current = null;
       }
+      if (resizeFrameRef.current !== null) {
+        cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+    };
+  }, [isInitialized, loadImage]);
+
+  // Playback using requestAnimationFrame to keep UI responsive on slower devices
+  useEffect(() => {
+    if (!isPlaying || imageCount <= 1) {
+      if (playbackFrameRef.current !== null) {
+        cancelAnimationFrame(playbackFrameRef.current);
+        playbackFrameRef.current = null;
+      }
+      return;
     }
+
+    let lastFrameTime = performance.now();
+    const targetInterval = 1000 / playSpeed;
+
+    const tick = (time: number) => {
+      if (time - lastFrameTime >= targetInterval) {
+        lastFrameTime = time;
+        startTransition(() => {
+          setCurrentImageIndex(prev => {
+            const next = prev + 1;
+            return next >= imageCount ? 0 : next;
+          });
+        });
+      }
+
+      playbackFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    playbackFrameRef.current = requestAnimationFrame(tick);
 
     return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
+      if (playbackFrameRef.current !== null) {
+        cancelAnimationFrame(playbackFrameRef.current);
+        playbackFrameRef.current = null;
       }
     };
-  }, [isPlaying, playSpeed, imageIds.length]);
+  }, [imageCount, isPlaying, playSpeed, startTransition]);
 
-  // Auto-play effect - start once when images are loaded
+  // Prefetch adjacent images to minimize playback stutter
   useEffect(() => {
-    if (isInitialized && imageIds.length > 1 && !isPlaying) {
-      // Start auto-play after a brief delay
-      const autoPlayTimer = setTimeout(() => {
-        setIsPlaying(true);
-      }, 500); // 500ms delay before starting auto-play
+    if (!cornerstone || imageCount <= 1) return;
 
-      return () => {
-        clearTimeout(autoPlayTimer);
-      };
-    }
-  }, [isInitialized, imageIds.length]);
+    const upcoming = [currentImageIndex + 1, currentImageIndex + 2]
+      .map(index => (index >= imageCount ? index % imageCount : index))
+      .filter(index => index !== currentImageIndex)
+      .map(index => imageIds[index]);
+
+    upcoming.forEach(imageId => {
+      if (imageId && cornerstone) {
+        cornerstone.loadImage(imageId).catch(() => undefined);
+      }
+    });
+  }, [currentImageIndex, imageCount, imageIds]);
 
   const nextImage = useCallback(() => {
-    if (currentImageIndex < imageIds.length - 1) {
-      setCurrentImageIndex(currentImageIndex + 1);
-    }
-  }, [currentImageIndex, imageIds.length]);
+    setCurrentImageIndex(prev => {
+      if (imageCount === 0) return 0;
+      return Math.min(prev + 1, imageCount - 1);
+    });
+  }, [imageCount]);
 
   const prevImage = useCallback(() => {
-    if (currentImageIndex > 0) {
-      setCurrentImageIndex(currentImageIndex - 1);
-    }
-  }, [currentImageIndex]);
+    setCurrentImageIndex(prev => (prev > 0 ? prev - 1 : 0));
+  }, []);
 
   const goToImage = useCallback((index: number) => {
-    if (index >= 0 && index < imageIds.length) {
-      setCurrentImageIndex(index);
-    }
-  }, [imageIds.length]);
+    if (imageCount === 0) return;
+
+    const clampedIndex = Math.max(0, Math.min(index, imageCount - 1));
+    setCurrentImageIndex(clampedIndex);
+  }, [imageCount]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
     const handleKeyPress = (event: KeyboardEvent) => {
-      if (isPlaying) return; // Disable keyboard controls during playback
+      if (isPlayingRef.current) return; // Disable keyboard controls during playback
+
+      const totalImages = imageCount;
+      if (totalImages === 0) return;
 
       switch (event.key) {
         case 'ArrowLeft':
@@ -273,12 +361,12 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
           break;
         case 'End':
           event.preventDefault();
-          goToImage(imageIds.length - 1);
+          goToImage(totalImages - 1);
           break;
         case ' ':
           event.preventDefault();
-          const jumpSize = Math.max(1, Math.floor(imageIds.length / 50));
-          goToImage(Math.min(imageIds.length - 1, currentImageIndex + jumpSize));
+          const jumpSize = Math.max(1, Math.floor(totalImages / 50));
+          goToImage(Math.min(totalImages - 1, currentIndexRef.current + jumpSize));
           break;
       }
     };
@@ -287,10 +375,11 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
     return () => {
       document.removeEventListener('keydown', handleKeyPress);
     };
-  }, [currentImageIndex, imageIds.length, isPlaying, goToImage, nextImage, prevImage]);
+  }, [goToImage, imageCount, nextImage, prevImage]);
 
 
   const togglePlayback = () => {
+    if (imageCount <= 1) return;
     setIsPlaying(!isPlaying);
   };
 
@@ -302,11 +391,13 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
   return (
     <div className="w-full h-full flex flex-col bg-neutral-950">
       <div className="flex-1 bg-black relative min-h-0 rounded-lg overflow-hidden">
-        <div
-          ref={elementRef}
-          className="w-full h-full"
-          style={{ minHeight: '200px' }}
-        />
+      <div
+        ref={elementRef}
+        className="w-full h-full"
+        style={{ minHeight: '200px' }}
+        role="img"
+        aria-label={viewerLabel}
+      />
       </div>
 
       <div className="bg-neutral-900/80 backdrop-blur-sm text-neutral-100 p-2 border-t border-neutral-800 flex-shrink-0">
@@ -314,7 +405,7 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
           <div className="flex items-center">
             <button
               onClick={prevImage}
-              disabled={currentImageIndex === 0 || isPlaying}
+              disabled={currentImageIndex === 0 || isPlaying || imageCount === 0}
               className="flex items-center justify-center w-8 h-8 bg-neutral-800 hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200 rounded-l border border-r-0 border-neutral-700 hover:border-neutral-600 disabled:border-neutral-800"
             >
               <SkipBack size={14} />
@@ -322,26 +413,36 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
 
             <button
               onClick={togglePlayback}
-              className="flex items-center justify-center w-10 h-8 bg-neutral-700 hover:bg-neutral-600 transition-all duration-200 border border-neutral-600 hover:border-neutral-500"
+              disabled={imageCount <= 1}
+              className={`flex items-center justify-center w-10 h-8 border transition-all duration-200 ${
+                imageCount <= 1
+                  ? 'bg-neutral-800 text-neutral-500 border-neutral-700 cursor-not-allowed'
+                  : 'bg-neutral-700 hover:bg-neutral-600 border-neutral-600 hover:border-neutral-500'
+              }`}
             >
               {isPlaying ? <Pause size={14} /> : <Play size={14} />}
             </button>
 
             <button
               onClick={nextImage}
-              disabled={currentImageIndex === imageIds.length - 1 || isPlaying}
+              disabled={currentImageIndex === imageCount - 1 || isPlaying || imageCount === 0}
               className="flex items-center justify-center w-8 h-8 bg-neutral-800 hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200 rounded-r border border-l-0 border-neutral-700 hover:border-neutral-600 disabled:border-neutral-800"
             >
               <SkipForward size={14} />
             </button>
           </div>
 
-          <div className="text-center flex-1 mx-3">
+          <div className="text-center flex-1 mx-3 overflow-hidden">
+            {normalizedSeriesName ? (
+              <div className="text-xs text-neutral-400 uppercase tracking-wide truncate">
+                {normalizedSeriesName}
+              </div>
+            ) : null}
             <div className="text-sm font-semibold text-neutral-100">
-              {currentImageIndex + 1} / {imageIds.length}
+              {imageCount === 0 ? '0 / 0' : `${currentImageIndex + 1} / ${imageCount}`}
             </div>
             <div className="text-xs text-neutral-400">
-              {imageIds.length > 0 ? Math.round(((currentImageIndex + 1) / imageIds.length) * 100) : 0}% {isPlaying && `• ${playSpeed}fps`}
+              {imageCount > 0 ? Math.round(((currentImageIndex + 1) / imageCount) * 100) : 0}% {isPlaying && `• ${playSpeed}fps`}
             </div>
           </div>
 
@@ -352,13 +453,16 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
           <input
             type="range"
             min="0"
-            max={Math.max(0, imageIds.length - 1)}
+            max={Math.max(0, imageCount - 1)}
             value={currentImageIndex}
             onChange={(e) => !isPlaying && goToImage(parseInt(e.target.value))}
-            disabled={isPlaying}
+            disabled={isPlaying || imageCount === 0}
             className="w-full h-1.5 bg-neutral-800 rounded-lg appearance-none cursor-pointer"
             style={{
-              background: `linear-gradient(to right, #525252 0%, #525252 ${((currentImageIndex + 1) / imageIds.length) * 100}%, #404040 ${((currentImageIndex + 1) / imageIds.length) * 100}%, #404040 100%)`
+              background:
+                imageCount > 0
+                  ? `linear-gradient(to right, #525252 0%, #525252 ${((currentImageIndex + 1) / imageCount) * 100}%, #404040 ${((currentImageIndex + 1) / imageCount) * 100}%, #404040 100%)`
+                  : undefined
             }}
           />
         </div>
@@ -384,35 +488,35 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
           <div className="flex gap-0.5 justify-center md:justify-end">
             <button
               onClick={() => goToImage(0)}
-              disabled={isPlaying}
+              disabled={isPlaying || imageCount === 0}
               className="px-1.5 py-0.5 bg-neutral-800 text-neutral-200 rounded text-xs hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200"
             >
               First
             </button>
             <button
-              onClick={() => goToImage(Math.floor(imageIds.length / 4))}
-              disabled={isPlaying}
+              onClick={() => goToImage(Math.floor(imageCount / 4))}
+              disabled={isPlaying || imageCount === 0}
               className="px-1.5 py-0.5 bg-neutral-800 text-neutral-200 rounded text-xs hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200"
             >
               25%
             </button>
             <button
-              onClick={() => goToImage(Math.floor(imageIds.length / 2))}
-              disabled={isPlaying}
+              onClick={() => goToImage(Math.floor(imageCount / 2))}
+              disabled={isPlaying || imageCount === 0}
               className="px-1.5 py-0.5 bg-neutral-800 text-neutral-200 rounded text-xs hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200"
             >
               50%
             </button>
             <button
-              onClick={() => goToImage(Math.floor((imageIds.length * 3) / 4))}
-              disabled={isPlaying}
+              onClick={() => goToImage(Math.floor((imageCount * 3) / 4))}
+              disabled={isPlaying || imageCount === 0}
               className="px-1.5 py-0.5 bg-neutral-800 text-neutral-200 rounded text-xs hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200"
             >
               75%
             </button>
             <button
-              onClick={() => goToImage(imageIds.length - 1)}
-              disabled={isPlaying}
+              onClick={() => goToImage(imageCount - 1)}
+              disabled={isPlaying || imageCount === 0}
               className="px-1.5 py-0.5 bg-neutral-800 text-neutral-200 rounded text-xs hover:bg-neutral-700 disabled:bg-neutral-800/50 disabled:cursor-not-allowed transition-all duration-200"
             >
               Last

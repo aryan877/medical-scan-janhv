@@ -1,32 +1,36 @@
-'use client';
+"use client";
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef } from "react";
 
 // Dynamic imports to avoid SSR issues
-let cornerstone: typeof import('cornerstone-core') | undefined;
-let cornerstoneWADOImageLoader: typeof import('cornerstone-wado-image-loader') | undefined;
-let dicomParser: typeof import('dicom-parser') | undefined;
+let cornerstone: typeof import("cornerstone-core") | undefined;
+let cornerstoneWADOImageLoader:
+  | typeof import("cornerstone-wado-image-loader")
+  | undefined;
+let dicomParser: typeof import("dicom-parser") | undefined;
 
 // Configure cornerstoneWADOImageLoader once at module level
 let isConfigured = false;
 
 async function initializeCornerstone() {
-  if (typeof window === 'undefined') return false;
+  if (typeof window === "undefined") return false;
 
   if (!isConfigured && !cornerstone) {
     try {
       const [
         cornerstoneModule,
         cornerstoneWADOImageLoaderModule,
-        dicomParserModule
+        dicomParserModule,
       ] = await Promise.all([
-        import('cornerstone-core'),
-        import('cornerstone-wado-image-loader'),
-        import('dicom-parser')
+        import("cornerstone-core"),
+        import("cornerstone-wado-image-loader"),
+        import("dicom-parser"),
       ]);
 
       cornerstone = cornerstoneModule.default || cornerstoneModule;
-      cornerstoneWADOImageLoader = cornerstoneWADOImageLoaderModule.default || cornerstoneWADOImageLoaderModule;
+      cornerstoneWADOImageLoader =
+        cornerstoneWADOImageLoaderModule.default ||
+        cornerstoneWADOImageLoaderModule;
       dicomParser = dicomParserModule.default || dicomParserModule;
 
       cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
@@ -35,13 +39,13 @@ async function initializeCornerstone() {
         useWebWorkers: false, // Disable for thumbnails for better performance
         decodeConfig: {
           convertFloatPixelDataToInt: false,
-          use16BitDataType: true
-        }
+          use16BitDataType: true,
+        },
       });
       isConfigured = true;
       return true;
     } catch (error) {
-      console.error('Failed to initialize cornerstone for thumbnails:', error);
+      console.error("Failed to initialize cornerstone for thumbnails:", error);
       return false;
     }
   }
@@ -54,20 +58,28 @@ interface DicomThumbnailProps {
   className?: string;
 }
 
-export default function DicomThumbnail({ dicomFile, size = 48, className = '' }: DicomThumbnailProps) {
+export default function DicomThumbnail({
+  dicomFile,
+  size = 48,
+  className = "",
+}: DicomThumbnailProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const idleCallbackIdRef = useRef<number | null>(null);
+  const timeoutIdRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const loadThumbnail = async () => {
-      if (!canvasRef.current || !dicomFile) return;
+    let isCancelled = false;
+
+    const runLoad = async () => {
+      if (isCancelled || !canvasRef.current || !dicomFile) return;
 
       try {
         // Ensure cornerstone is configured
         const initialized = await initializeCornerstone();
-        if (!initialized || !cornerstone) return;
+        if (isCancelled || !initialized || !cornerstone) return;
 
         const canvas = canvasRef.current;
-        const context = canvas.getContext('2d');
+        const context = canvas.getContext("2d");
         if (!context) return;
 
         // Set canvas size
@@ -78,10 +90,12 @@ export default function DicomThumbnail({ dicomFile, size = 48, className = '' }:
         const imageId = `wadouri:${dicomFile}`;
         const image = await cornerstone.loadImage(imageId);
 
+        if (isCancelled) return;
+
         // Create a temporary canvas for rendering
-        if (typeof document === 'undefined') return;
-        const tempCanvas = document.createElement('canvas');
-        const tempContext = tempCanvas.getContext('2d');
+        if (typeof document === "undefined") return;
+        const tempCanvas = document.createElement("canvas");
+        const tempContext = tempCanvas.getContext("2d");
         if (!tempContext) return;
 
         // Calculate dimensions to fit the image in the thumbnail
@@ -104,17 +118,20 @@ export default function DicomThumbnail({ dicomFile, size = 48, className = '' }:
 
         // Get the pixel data
         const pixelData = image.getPixelData();
-        const imageData = tempContext.createImageData(image.width, image.height);
+        const imageData = tempContext.createImageData(
+          image.width,
+          image.height
+        );
 
         // Convert DICOM pixel data to RGBA
         if (image.color) {
           // Color image
           for (let i = 0; i < pixelData.length; i += 3) {
             const pixelIndex = (i / 3) * 4;
-            imageData.data[pixelIndex] = pixelData[i];     // R
+            imageData.data[pixelIndex] = pixelData[i]; // R
             imageData.data[pixelIndex + 1] = pixelData[i + 1]; // G
             imageData.data[pixelIndex + 2] = pixelData[i + 2]; // B
-            imageData.data[pixelIndex + 3] = 255;              // A
+            imageData.data[pixelIndex + 3] = 255; // A
           }
         } else {
           // Grayscale image - apply window/level
@@ -139,10 +156,10 @@ export default function DicomThumbnail({ dicomFile, size = 48, className = '' }:
             }
 
             const pixelIndex = i * 4;
-            imageData.data[pixelIndex] = pixelValue;     // R
+            imageData.data[pixelIndex] = pixelValue; // R
             imageData.data[pixelIndex + 1] = pixelValue; // G
             imageData.data[pixelIndex + 2] = pixelValue; // B
-            imageData.data[pixelIndex + 3] = 255;        // A
+            imageData.data[pixelIndex + 3] = 255; // A
           }
         }
 
@@ -150,7 +167,7 @@ export default function DicomThumbnail({ dicomFile, size = 48, className = '' }:
         tempContext.putImageData(imageData, 0, 0);
 
         // Clear the thumbnail canvas
-        context.fillStyle = '#000';
+        context.fillStyle = "#000";
         context.fillRect(0, 0, size, size);
 
         // Draw the scaled image centered on the thumbnail canvas
@@ -159,28 +176,67 @@ export default function DicomThumbnail({ dicomFile, size = 48, className = '' }:
 
         context.drawImage(tempCanvas, offsetX, offsetY, drawWidth, drawHeight);
       } catch (err) {
-        console.error('Failed to load DICOM thumbnail:', err);
+        console.error("Failed to load DICOM thumbnail:", err);
 
         // Show fallback
-        if (canvasRef.current) {
+        if (!isCancelled && canvasRef.current) {
           const canvas = canvasRef.current;
-          const context = canvas.getContext('2d');
+          const context = canvas.getContext("2d");
           if (context) {
             canvas.width = size;
             canvas.height = size;
-            context.fillStyle = '#374151';
+            context.fillStyle = "#374151";
             context.fillRect(0, 0, size, size);
-            context.fillStyle = '#9CA3AF';
-            context.font = '12px sans-serif';
-            context.textAlign = 'center';
-            context.textBaseline = 'middle';
-            context.fillText('IMG', size / 2, size / 2);
+            context.fillStyle = "#9CA3AF";
+            context.font = "12px sans-serif";
+            context.textAlign = "center";
+            context.textBaseline = "middle";
+            context.fillText("IMG", size / 2, size / 2);
           }
         }
       }
     };
 
-    loadThumbnail();
+    const scheduleLoad = () => {
+      if (typeof window === "undefined") {
+        timeoutIdRef.current = setTimeout(runLoad, 0);
+        return;
+      }
+
+      const idleCallback = (
+        window as unknown as {
+          requestIdleCallback?: (cb: () => void) => number;
+        }
+      ).requestIdleCallback;
+      if (idleCallback) {
+        idleCallbackIdRef.current = idleCallback(() => {
+          runLoad();
+        });
+      } else {
+        timeoutIdRef.current = setTimeout(runLoad, 0);
+      }
+    };
+
+    scheduleLoad();
+
+    return () => {
+      isCancelled = true;
+
+      if (typeof window !== "undefined") {
+        const cancelIdleCallback = (
+          window as unknown as { cancelIdleCallback?: (handle: number) => void }
+        ).cancelIdleCallback;
+        if (cancelIdleCallback && idleCallbackIdRef.current !== null) {
+          cancelIdleCallback(idleCallbackIdRef.current);
+          idleCallbackIdRef.current = null;
+        }
+      }
+
+      if (timeoutIdRef.current) {
+        clearTimeout(timeoutIdRef.current);
+        timeoutIdRef.current = null;
+      }
+    };
   }, [dicomFile, size]);
 
   return (
