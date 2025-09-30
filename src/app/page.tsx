@@ -132,7 +132,10 @@ export default function Home() {
           {/* DICOM viewer takes remaining space */}
           <div className="flex-1 min-h-0 p-4">
             {selectedSeries ? (
-              <DicomViewer dicomFiles={selectedSeries.files} seriesName={selectedSeries.name} />
+              <DicomViewer
+                dicomFiles={selectedSeries.files}
+                seriesName={selectedSeries.name}
+              />
             ) : (
               <div className="h-full flex items-center justify-center bg-neutral-900/30 rounded-lg border border-neutral-800">
                 <p className="text-neutral-400 text-base">
@@ -157,7 +160,10 @@ export default function Home() {
 
           <div className="flex-1 min-h-0 p-3 pl-1">
             {selectedSeries ? (
-              <DicomViewer dicomFiles={selectedSeries.files} seriesName={selectedSeries.name} />
+              <DicomViewer
+                dicomFiles={selectedSeries.files}
+                seriesName={selectedSeries.name}
+              />
             ) : (
               <div className="h-full flex items-center justify-center bg-neutral-900/30 rounded-lg border border-neutral-800">
                 <p className="text-neutral-400 text-base">
