@@ -410,7 +410,7 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
       />
       </div>
 
-      <div className="bg-neutral-900/80 backdrop-blur-sm text-neutral-100 p-2 border-t border-neutral-800 flex-shrink-0">
+      <div className="bg-neutral-900/80 backdrop-blur-sm text-neutral-100 p-2 border-t border-neutral-800 flex-shrink-0" style={{ paddingBottom: `calc(0.5rem + env(safe-area-inset-bottom))` }}>
         <div className="flex items-center justify-between mb-1.5">
           <div className="flex items-center">
             <button
