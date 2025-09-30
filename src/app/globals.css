@@ -23,4 +23,85 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+  overflow: hidden;
+  touch-action: manipulation;
+}
+
+.touch-pan-y {
+  touch-action: pan-y;
+}
+
+.touch-pan-x {
+  touch-action: pan-x;
+}
+
+.h-screen-minus-header {
+  height: calc(100vh - 60px);
+}
+
+@media (max-width: 768px) {
+  .h-screen-minus-header {
+    height: calc(100vh - 56px);
+  }
+}
+
+.h-safe-screen {
+  height: calc(100vh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+}
+
+.mobile-optimized {
+  min-height: 0;
+  height: 100%;
+}
+
+@media (max-width: 768px) {
+  .mobile-viewer-height {
+    height: calc(100vh - 200px);
+  }
+
+  .mobile-controls-height {
+    height: 200px;
+    min-height: 180px;
+    max-height: 220px;
+  }
+}
+
+/* Ensure touch targets are large enough on mobile */
+@media (max-width: 768px) {
+  button {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  .mobile-button {
+    padding: 12px 16px;
+    font-size: 16px;
+  }
+
+  .mobile-text {
+    font-size: 16px;
+    line-height: 1.5;
+  }
+}
+
+/* Custom range slider styles */
+.slider::-webkit-slider-thumb {
+  appearance: none;
+  height: 20px;
+  width: 20px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
+}
+
+.slider::-moz-range-thumb {
+  height: 20px;
+  width: 20px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+  border: 2px solid #ffffff;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.5);
 }
