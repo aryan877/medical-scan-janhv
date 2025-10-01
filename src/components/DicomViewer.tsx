@@ -20,15 +20,21 @@ interface DicomViewerProps {
   seriesName?: string;
 }
 
+const MIN_VIEWER_HEIGHT = 220;
+
 export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }: DicomViewerProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const elementRef = useRef<HTMLDivElement>(null);
+  const controlsRef = useRef<HTMLDivElement>(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isInitialized, setIsInitialized] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playSpeed, setPlaySpeed] = useState(10);
+  const [viewerAreaHeight, setViewerAreaHeight] = useState<number | null>(null);
   const playbackFrameRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heightMeasureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [, startTransition] = useTransition();
   const imageIds = useMemo(() => dicomFiles.map(file => `wadouri:${file}`), [dicomFiles]);
   const imageCount = imageIds.length;
@@ -43,6 +49,61 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
     return normalizedSeriesName ? `${normalizedSeriesName} viewer` : 'DICOM viewer';
   }, [normalizedSeriesName]);
 
+  const applyViewportToFit = useCallback(() => {
+    const element = elementRef.current;
+    if (!element || !cornerstone || !isInitialized) {
+      return;
+    }
+
+    try {
+      cornerstone.resize(element, true);
+      const enabledElement = cornerstone.getEnabledElement(element);
+      const canvas = enabledElement?.canvas;
+      const image = enabledElement?.image;
+
+      if (!canvas || !image) {
+        return;
+      }
+
+      const scaleX = canvas.width / image.width;
+      const scaleY = canvas.height / image.height;
+      const scale = Math.min(scaleX, scaleY);
+
+      const viewport = {
+        scale,
+        translation: { x: 0, y: 0 },
+        voi: {
+          windowCenter: image.windowCenter,
+          windowWidth: image.windowWidth
+        },
+        invert: false,
+        pixelReplication: false,
+        rotation: 0,
+        hflip: false,
+        vflip: false
+      };
+
+      cornerstone.setViewport(element, viewport);
+    } catch (error) {
+      console.warn('Resize error:', error);
+    }
+  }, [isInitialized]);
+
+  const scheduleViewportResize = useCallback(() => {
+    if (!elementRef.current || !cornerstone || !isInitialized) {
+      return;
+    }
+
+    if (resizeFrameRef.current !== null) {
+      cancelAnimationFrame(resizeFrameRef.current);
+    }
+
+    resizeFrameRef.current = requestAnimationFrame(() => {
+      applyViewportToFit();
+      resizeFrameRef.current = null;
+    });
+  }, [applyViewportToFit, isInitialized]);
+
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
@@ -52,7 +113,7 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
   }, [currentImageIndex]);
 
   useEffect(() => {
-    // Reset playback state when series changes to avoid unintentional autoplay
+    // Reset playback state when series changes
     setIsPlaying(false);
     setCurrentImageIndex(0);
   }, [dicomFiles]);
@@ -61,12 +122,32 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
     let isCancelled = false;
     const viewerElement = elementRef.current;
     let hasEnabledElement = false;
+    let resizeObserver: ResizeObserver | null = null;
 
     const enableElement = () => {
       if (!cornerstone || !viewerElement || hasEnabledElement) return;
       try {
+        // Ensure element has proper dimensions before enabling
+        const rect = viewerElement.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) {
+          // Use ResizeObserver to wait for proper dimensions
+          resizeObserver = new ResizeObserver((entries) => {
+            for (const entry of entries) {
+              if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+                resizeObserver?.disconnect();
+                enableElement();
+                break;
+              }
+            }
+          });
+          resizeObserver.observe(viewerElement);
+          return;
+        }
+
         cornerstone.enable(viewerElement);
         hasEnabledElement = true;
+        cornerstone.resize(viewerElement, true);
+
         if (!isCancelled) {
           setIsInitialized(true);
         }
@@ -106,7 +187,7 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
           cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
 
           cornerstoneWADOImageLoader.configure({
-            useWebWorkers: true,
+            useWebWorkers: false, // Disable to avoid 'fs' issues
             decodeConfig: {
               convertFloatPixelDataToInt: false,
               use16BitDataType: true
@@ -124,6 +205,10 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
 
     return () => {
       isCancelled = true;
+
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
 
       if (hasEnabledElement && viewerElement && cornerstone) {
         try {
@@ -206,93 +291,239 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
   }, [currentImageIndex, imageCount]);
 
   useEffect(() => {
-    const handleResize = () => {
-      if (elementRef.current && cornerstone && isInitialized) {
-        if (resizeFrameRef.current !== null) {
-          cancelAnimationFrame(resizeFrameRef.current);
-        }
+    if (!isInitialized || typeof window === 'undefined') {
+      return;
+    }
 
-        resizeFrameRef.current = requestAnimationFrame(() => {
-          try {
-            const element = elementRef.current;
-            if (cornerstone && element) {
-              cornerstone.resize(element, true);
-              // Re-apply viewport after resize
-              const enabledElement = cornerstone.getEnabledElement(element);
-              if (enabledElement && enabledElement.image) {
-                const canvas = enabledElement.canvas;
-                const image = enabledElement.image;
+    const orientationTimeouts: Array<ReturnType<typeof setTimeout>> = [];
 
-                // Calculate scale to fit image in canvas
-                const scaleX = canvas.width / image.width;
-                const scaleY = canvas.height / image.height;
-                const scale = Math.min(scaleX, scaleY);
-
-                const viewport = {
-                  scale,
-                  translation: { x: 0, y: 0 },
-                  voi: {
-                    windowCenter: image.windowCenter,
-                    windowWidth: image.windowWidth
-                  },
-                  invert: false,
-                  pixelReplication: false,
-                  rotation: 0,
-                  hflip: false,
-                  vflip: false
-                };
-
-                cornerstone.setViewport(element, viewport);
-              }
-            }
-          } catch (error) {
-            console.warn('Resize error:', error);
-          }
-        });
-      }
+    const flushResize = () => {
+      scheduleViewportResize();
     };
 
-    // Handle orientation change specifically for mobile
-    const handleOrientationChange = () => {
-      // Wait for orientation change to complete
-      setTimeout(handleResize, 200);
-    };
-
-    // Use debounced resize handler
     const debouncedResize = () => {
       if (resizeTimeoutRef.current) {
         clearTimeout(resizeTimeoutRef.current);
       }
-      resizeTimeoutRef.current = setTimeout(handleResize, 150);
+      resizeTimeoutRef.current = setTimeout(() => {
+        flushResize();
+        resizeTimeoutRef.current = null;
+      }, 150);
+    };
+
+    const handleOrientationChange = () => {
+      orientationTimeouts.push(
+        setTimeout(() => {
+          flushResize();
+        }, 200)
+      );
+      orientationTimeouts.push(
+        setTimeout(() => {
+          flushResize();
+        }, 700)
+      );
+    };
+
+    const mediaQuery = window.matchMedia('(max-width: 768px)');
+    const handleMediaChange = () => {
+      orientationTimeouts.push(
+        setTimeout(() => {
+          flushResize();
+        }, 100)
+      );
     };
 
     window.addEventListener('resize', debouncedResize);
     window.addEventListener('orientationchange', handleOrientationChange);
-
-    // Also listen for viewport changes (important for mobile)
-    const mediaQuery = window.matchMedia('(max-width: 768px)');
-    const handleMediaChange = () => {
-      setTimeout(handleResize, 100);
-    };
-
     mediaQuery.addEventListener('change', handleMediaChange);
+
+    flushResize();
 
     return () => {
       window.removeEventListener('resize', debouncedResize);
       window.removeEventListener('orientationchange', handleOrientationChange);
       mediaQuery.removeEventListener('change', handleMediaChange);
+
       if (resizeTimeoutRef.current) {
         clearTimeout(resizeTimeoutRef.current);
         resizeTimeoutRef.current = null;
       }
+
       if (resizeFrameRef.current !== null) {
         cancelAnimationFrame(resizeFrameRef.current);
         resizeFrameRef.current = null;
       }
-    };
-  }, [isInitialized, loadImage]);
 
-  // Playback using requestAnimationFrame to keep UI responsive on slower devices
+      orientationTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+    };
+  }, [isInitialized, scheduleViewportResize]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const containerElement = containerRef.current;
+    if (!containerElement) {
+      return;
+    }
+
+    const observerTargets: Element[] = [containerElement];
+    if (controlsRef.current) {
+      observerTargets.push(controlsRef.current);
+    }
+
+    const updateViewerHeight = () => {
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      if (!containerRect) {
+        return;
+      }
+
+      const controlsRect = controlsRef.current?.getBoundingClientRect();
+      const availableHeight = containerRect.height - (controlsRect?.height ?? 0);
+      const nextHeight = Math.max(availableHeight, MIN_VIEWER_HEIGHT);
+
+      setViewerAreaHeight(prev => {
+        if (prev === null || Math.abs(prev - nextHeight) > 1) {
+          return nextHeight;
+        }
+        return prev;
+      });
+    };
+
+    updateViewerHeight();
+
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => {
+          updateViewerHeight();
+        })
+      : null;
+
+    if (resizeObserver) {
+      observerTargets.forEach(target => resizeObserver.observe(target));
+    }
+
+    const scheduleHeightUpdate = (delay: number) => {
+      if (heightMeasureTimeoutRef.current) {
+        clearTimeout(heightMeasureTimeoutRef.current);
+      }
+      heightMeasureTimeoutRef.current = setTimeout(() => {
+        updateViewerHeight();
+        heightMeasureTimeoutRef.current = null;
+      }, delay);
+    };
+
+    const handleResize = () => scheduleHeightUpdate(80);
+    const handleOrientationChange = () => scheduleHeightUpdate(250);
+
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleOrientationChange);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleOrientationChange);
+
+      if (resizeObserver) {
+        resizeObserver.disconnect();
+      }
+
+      if (heightMeasureTimeoutRef.current) {
+        clearTimeout(heightMeasureTimeoutRef.current);
+        heightMeasureTimeoutRef.current = null;
+      }
+    };
+  }, [containerRef, controlsRef]);
+
+  useEffect(() => {
+    if (viewerAreaHeight === null) {
+      return;
+    }
+
+    scheduleViewportResize();
+  }, [viewerAreaHeight, scheduleViewportResize]);
+
+  const nextImage = useCallback(() => {
+    setCurrentImageIndex(prev => {
+      if (imageCount === 0) return 0;
+      return Math.min(prev + 1, imageCount - 1);
+    });
+  }, [imageCount]);
+
+  const prevImage = useCallback(() => {
+    setCurrentImageIndex(prev => (prev > 0 ? prev - 1 : 0));
+  }, []);
+
+  const goToImage = useCallback((index: number) => {
+    if (imageCount === 0) return;
+
+    const clampedIndex = Math.max(0, Math.min(index, imageCount - 1));
+    if (clampedIndex !== currentImageIndex) {
+      setCurrentImageIndex(clampedIndex);
+    }
+  }, [imageCount, currentImageIndex]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const handleKeyPress = (event: KeyboardEvent) => {
+      if (isPlayingRef.current) {
+        return;
+      }
+
+      const totalImages = imageCount;
+      if (totalImages === 0) {
+        return;
+      }
+
+      switch (event.key) {
+        case 'ArrowLeft':
+        case 'a':
+        case 'A':
+          event.preventDefault();
+          prevImage();
+          break;
+        case 'ArrowRight':
+        case 'd':
+        case 'D':
+          event.preventDefault();
+          nextImage();
+          break;
+        case 'Home':
+          event.preventDefault();
+          goToImage(0);
+          break;
+        case 'End':
+          event.preventDefault();
+          goToImage(totalImages - 1);
+          break;
+        case ' ':
+          event.preventDefault();
+          {
+            const jumpSize = Math.max(1, Math.floor(totalImages / 50));
+            goToImage(Math.min(totalImages - 1, currentIndexRef.current + jumpSize));
+          }
+          break;
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyPress);
+    return () => {
+      document.removeEventListener('keydown', handleKeyPress);
+    };
+  }, [goToImage, imageCount, nextImage, prevImage]);
+
+  const togglePlayback = () => {
+    if (imageCount <= 1) return;
+    setIsPlaying(!isPlaying);
+  };
+
+  const changePlaySpeed = (speed: number) => {
+    setPlaySpeed(speed);
+  };
+
+  // Playback using requestAnimationFrame
   useEffect(() => {
     if (!isPlaying || imageCount <= 1) {
       if (playbackFrameRef.current !== null) {
@@ -329,113 +560,37 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
     };
   }, [imageCount, isPlaying, playSpeed, startTransition]);
 
-  // Prefetch adjacent images to minimize playback stutter
-  useEffect(() => {
-    if (!cornerstone || imageCount <= 1) return;
-
-    const upcoming = [currentImageIndex + 1, currentImageIndex + 2]
-      .map(index => (index >= imageCount ? index % imageCount : index))
-      .filter(index => index !== currentImageIndex)
-      .map(index => imageIds[index]);
-
-    upcoming.forEach(imageId => {
-      if (imageId && cornerstone) {
-        cornerstone.loadImage(imageId).catch(() => undefined);
-      }
-    });
-  }, [currentImageIndex, imageCount, imageIds]);
-
-  const nextImage = useCallback(() => {
-    setCurrentImageIndex(prev => {
-      if (imageCount === 0) return 0;
-      return Math.min(prev + 1, imageCount - 1);
-    });
-  }, [imageCount]);
-
-  const prevImage = useCallback(() => {
-    setCurrentImageIndex(prev => (prev > 0 ? prev - 1 : 0));
-  }, []);
-
-  const goToImage = useCallback((index: number) => {
-    if (imageCount === 0) return;
-
-    const clampedIndex = Math.max(0, Math.min(index, imageCount - 1));
-    if (clampedIndex !== currentImageIndex) {
-      setCurrentImageIndex(clampedIndex);
-    }
-  }, [imageCount, currentImageIndex]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-
-    const handleKeyPress = (event: KeyboardEvent) => {
-      if (isPlayingRef.current) return; // Disable keyboard controls during playback
-
-      const totalImages = imageCount;
-      if (totalImages === 0) return;
-
-      switch (event.key) {
-        case 'ArrowLeft':
-        case 'a':
-        case 'A':
-          event.preventDefault();
-          prevImage();
-          break;
-        case 'ArrowRight':
-        case 'd':
-        case 'D':
-          event.preventDefault();
-          nextImage();
-          break;
-        case 'Home':
-          event.preventDefault();
-          goToImage(0);
-          break;
-        case 'End':
-          event.preventDefault();
-          goToImage(totalImages - 1);
-          break;
-        case ' ':
-          event.preventDefault();
-          const jumpSize = Math.max(1, Math.floor(totalImages / 50));
-          goToImage(Math.min(totalImages - 1, currentIndexRef.current + jumpSize));
-          break;
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyPress);
-    return () => {
-      document.removeEventListener('keydown', handleKeyPress);
-    };
-  }, [goToImage, imageCount, nextImage, prevImage]);
-
-
-  const togglePlayback = () => {
-    if (imageCount <= 1) return;
-    setIsPlaying(!isPlaying);
-  };
-
-  const changePlaySpeed = (speed: number) => {
-    setPlaySpeed(speed);
-  };
-
-
   return (
-    <div className="w-full h-full flex flex-col">
+    <div ref={containerRef} className="w-full h-full flex flex-col min-h-0">
       {/* Image viewer area */}
-      <div className="flex-1 bg-black">
+      <div
+        className="relative flex-1 bg-black mobile-viewer-height overflow-hidden"
+        style={{
+          height: viewerAreaHeight ?? undefined,
+          minHeight: MIN_VIEWER_HEIGHT
+        }}
+      >
         <div
           ref={elementRef}
-          className="w-full h-full"
+          className="absolute inset-0"
           role="img"
           aria-label={viewerLabel}
+          style={{
+            touchAction: 'pan-x pan-y pinch-zoom',
+            userSelect: 'none',
+            WebkitUserSelect: 'none',
+            WebkitTouchCallout: 'none'
+          }}
         />
       </div>
 
       {/* Controls area */}
-      <div className="bg-neutral-900/95 backdrop-blur-sm text-neutral-100 border-t border-neutral-700/50 flex-shrink-0">
+      <div
+        ref={controlsRef}
+        className="bg-neutral-900/95 backdrop-blur-sm text-neutral-100 border-t border-neutral-700/50 flex-shrink-0 mobile-controls-height"
+      >
         <div className="pb-safe">
-        <div className="p-2 space-y-2">
+          <div className="p-2 space-y-2">
           {/* Top row: Controls and counter */}
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1">
@@ -503,7 +658,7 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
             />
           </div>
 
-          {/* Bottom row: Speed and jump buttons - compact for mobile */}
+          {/* Bottom row: Speed and jump buttons */}
           <div className="overflow-x-auto scrollbar-hide">
             <div className="flex items-center justify-between min-w-max gap-2">
               <div className="flex items-center gap-1">

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-
 // Dynamic imports to avoid SSR issues
 let cornerstone: typeof import("cornerstone-core") | undefined;
 let cornerstoneWADOImageLoader:
@@ -9,7 +8,7 @@ let cornerstoneWADOImageLoader:
   | undefined;
 let dicomParser: typeof import("dicom-parser") | undefined;
 
-// Configure cornerstoneWADOImageLoader once at module level
+// Configure cornerstone once at module level
 let isConfigured = false;
 
 async function initializeCornerstone() {
@@ -36,7 +35,7 @@ async function initializeCornerstone() {
       cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
       cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
       cornerstoneWADOImageLoader.configure({
-        useWebWorkers: false, // Disable for thumbnails for better performance
+        useWebWorkers: false, // Disable for thumbnails
         decodeConfig: {
           convertFloatPixelDataToInt: false,
           use16BitDataType: true,
@@ -76,7 +75,7 @@ export default function DicomThumbnail({
       try {
         // Ensure cornerstone is configured
         const initialized = await initializeCornerstone();
-        if (isCancelled || !initialized || !cornerstone) return;
+        if (isCancelled || !initialized) return;
 
         const canvas = canvasRef.current;
         const context = canvas.getContext("2d");
@@ -88,7 +87,7 @@ export default function DicomThumbnail({
 
         // Load the DICOM image
         const imageId = `wadouri:${dicomFile}`;
-        const image = await cornerstone.loadImage(imageId);
+        const image = await cornerstone!.loadImage(imageId);
 
         if (isCancelled) return;
 
@@ -135,13 +134,13 @@ export default function DicomThumbnail({
           }
         } else {
           // Grayscale image - apply window/level
-          const windowCenter = image.windowCenter || 128;
-          const windowWidth = image.windowWidth || 256;
-          const slope = image.slope || 1;
-          const intercept = image.intercept || 0;
+          const windowCenter = Number(image.windowCenter) || 128;
+          const windowWidth = Number(image.windowWidth) || 256;
+          const slope = Number(image.slope) || 1;
+          const intercept = Number(image.intercept) || 0;
 
           for (let i = 0; i < pixelData.length; i++) {
-            let pixelValue = pixelData[i] * slope + intercept;
+            let pixelValue = Number(pixelData[i]) * slope + intercept;
 
             // Apply window/level
             const minValue = windowCenter - windowWidth / 2;
@@ -152,7 +151,8 @@ export default function DicomThumbnail({
             } else if (pixelValue >= maxValue) {
               pixelValue = 255;
             } else {
-              pixelValue = ((pixelValue - minValue) / windowWidth) * 255;
+              pixelValue =
+                ((pixelValue - minValue) / Number(windowWidth)) * 255;
             }
 
             const pixelIndex = i * 4;
