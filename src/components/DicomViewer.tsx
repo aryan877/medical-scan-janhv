@@ -1,19 +1,21 @@
-'use client';
+"use client";
 
-import React, {
+import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import {
   useCallback,
   useEffect,
   useMemo,
   useRef,
   useState,
-  useTransition
-} from 'react';
-import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
+  useTransition,
+} from "react";
 
 // Dynamic imports to avoid SSR issues
-let cornerstone: typeof import('cornerstone-core') | undefined;
-let cornerstoneWADOImageLoader: typeof import('cornerstone-wado-image-loader') | undefined;
-let dicomParser: typeof import('dicom-parser') | undefined;
+let cornerstone: typeof import("cornerstone-core") | undefined;
+let cornerstoneWADOImageLoader:
+  | typeof import("cornerstone-wado-image-loader")
+  | undefined;
+let dicomParser: typeof import("dicom-parser") | undefined;
 
 interface DicomViewerProps {
   dicomFiles: string[];
@@ -21,33 +23,63 @@ interface DicomViewerProps {
 }
 
 const MIN_VIEWER_HEIGHT = 220;
+const DESKTOP_SPEEDS = [0.5, 1, 2, 5, 10];
+const MOBILE_SPEEDS = [0.5, 1, 2, 5, 10];
 
-export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }: DicomViewerProps) {
+export default function DicomViewer({
+  dicomFiles,
+  seriesName = "DICOM_Series",
+}: DicomViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const elementRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
+  const elementRef = useRef<HTMLDivElement>(null);
+
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [isInitialized, setIsInitialized] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playSpeed, setPlaySpeed] = useState(10);
-  const [viewerAreaHeight, setViewerAreaHeight] = useState<number | null>(null);
+  const [isMobile, setIsMobile] = useState(false);
+
   const playbackFrameRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const heightMeasureTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [, startTransition] = useTransition();
-  const imageIds = useMemo(() => dicomFiles.map(file => `wadouri:${file}`), [dicomFiles]);
+
+  const imageIds = useMemo(
+    () => dicomFiles.map((file) => `wadouri:${file}`),
+    [dicomFiles]
+  );
   const imageCount = imageIds.length;
   const isPlayingRef = useRef(isPlaying);
   const currentIndexRef = useRef(currentImageIndex);
+
   const normalizedSeriesName = useMemo(
-    () => (seriesName ? seriesName.replace(/_/g, ' ').trim() : ''),
+    () => (seriesName ? seriesName.replace(/_/g, " ").trim() : ""),
     [seriesName]
   );
 
-  const viewerLabel = useMemo(() => {
-    return normalizedSeriesName ? `${normalizedSeriesName} viewer` : 'DICOM viewer';
-  }, [normalizedSeriesName]);
+  const viewerLabel = normalizedSeriesName
+    ? `${normalizedSeriesName} viewer`
+    : "DICOM viewer";
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const media = window.matchMedia("(max-width: 767px)");
+    const update = () => setIsMobile(media.matches);
+
+    update();
+
+    if (media.addEventListener) {
+      media.addEventListener("change", update);
+      return () => media.removeEventListener("change", update);
+    }
+
+    media.addListener(update);
+    return () => media.removeListener(update);
+  }, []);
 
   const applyViewportToFit = useCallback(() => {
     const element = elementRef.current;
@@ -74,18 +106,18 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
         translation: { x: 0, y: 0 },
         voi: {
           windowCenter: image.windowCenter,
-          windowWidth: image.windowWidth
+          windowWidth: image.windowWidth,
         },
         invert: false,
         pixelReplication: false,
         rotation: 0,
         hflip: false,
-        vflip: false
+        vflip: false,
       };
 
       cornerstone.setViewport(element, viewport);
     } catch (error) {
-      console.warn('Resize error:', error);
+      console.warn("Resize error:", error);
     }
   }, [isInitialized]);
 
@@ -105,6 +137,88 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
   }, [applyViewportToFit, isInitialized]);
 
   useEffect(() => {
+    if (!isInitialized || typeof window === "undefined") {
+      return;
+    }
+
+    const orientationTimeouts: Array<ReturnType<typeof setTimeout>> = [];
+
+    const flushResize = () => {
+      scheduleViewportResize();
+    };
+
+    const debouncedResize = () => {
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+      }
+      resizeTimeoutRef.current = setTimeout(() => {
+        flushResize();
+        resizeTimeoutRef.current = null;
+      }, 150);
+    };
+
+    const handleOrientationChange = () => {
+      orientationTimeouts.push(setTimeout(flushResize, 200));
+      orientationTimeouts.push(setTimeout(flushResize, 700));
+    };
+
+    const mediaQuery = window.matchMedia("(max-width: 768px)");
+    const handleMediaChange = () => {
+      orientationTimeouts.push(setTimeout(flushResize, 100));
+    };
+
+    window.addEventListener("resize", debouncedResize);
+    window.addEventListener("orientationchange", handleOrientationChange);
+    mediaQuery.addEventListener("change", handleMediaChange);
+
+    flushResize();
+
+    return () => {
+      window.removeEventListener("resize", debouncedResize);
+      window.removeEventListener("orientationchange", handleOrientationChange);
+      mediaQuery.removeEventListener("change", handleMediaChange);
+
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current);
+        resizeTimeoutRef.current = null;
+      }
+
+      if (resizeFrameRef.current !== null) {
+        cancelAnimationFrame(resizeFrameRef.current);
+        resizeFrameRef.current = null;
+      }
+
+      orientationTimeouts.forEach((timeoutId) => clearTimeout(timeoutId));
+    };
+  }, [isInitialized, scheduleViewportResize]);
+
+  useEffect(() => {
+    if (!isInitialized || typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      scheduleViewportResize();
+    });
+
+    if (containerRef.current) {
+      observer.observe(containerRef.current);
+    }
+
+    if (controlsRef.current) {
+      observer.observe(controlsRef.current);
+    }
+
+    return () => observer.disconnect();
+  }, [isInitialized, scheduleViewportResize]);
+
+  useEffect(() => {
+    if (isInitialized) {
+      scheduleViewportResize();
+    }
+  }, [isInitialized, isMobile, scheduleViewportResize]);
+
+  useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
@@ -113,7 +227,6 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
   }, [currentImageIndex]);
 
   useEffect(() => {
-    // Reset playback state when series changes
     setIsPlaying(false);
     setCurrentImageIndex(0);
   }, [dicomFiles]);
@@ -127,10 +240,8 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
     const enableElement = () => {
       if (!cornerstone || !viewerElement || hasEnabledElement) return;
       try {
-        // Ensure element has proper dimensions before enabling
         const rect = viewerElement.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) {
-          // Use ResizeObserver to wait for proper dimensions
           resizeObserver = new ResizeObserver((entries) => {
             for (const entry of entries) {
               if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
@@ -152,52 +263,54 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
           setIsInitialized(true);
         }
       } catch (error) {
-        const message = (error as Error)?.message || '';
-        if (message.includes('already been enabled')) {
+        const message = (error as Error)?.message || "";
+        if (message.includes("already been enabled")) {
           hasEnabledElement = true;
           if (!isCancelled) {
             setIsInitialized(true);
           }
         } else {
-          console.error('Failed to enable Cornerstone element:', error);
+          console.error("Failed to enable Cornerstone element:", error);
         }
       }
     };
 
     const initializeCornerstone = async () => {
       try {
-        if (typeof window === 'undefined') return;
+        if (typeof window === "undefined") return;
 
         if (!cornerstone) {
           const [
             cornerstoneModule,
             cornerstoneWADOImageLoaderModule,
-            dicomParserModule
+            dicomParserModule,
           ] = await Promise.all([
-            import('cornerstone-core'),
-            import('cornerstone-wado-image-loader'),
-            import('dicom-parser')
+            import("cornerstone-core"),
+            import("cornerstone-wado-image-loader"),
+            import("dicom-parser"),
           ]);
 
           cornerstone = cornerstoneModule.default || cornerstoneModule;
-          cornerstoneWADOImageLoader = cornerstoneWADOImageLoaderModule.default || cornerstoneWADOImageLoaderModule;
+          cornerstoneWADOImageLoader =
+            cornerstoneWADOImageLoaderModule.default ||
+            cornerstoneWADOImageLoaderModule;
           dicomParser = dicomParserModule.default || dicomParserModule;
 
           cornerstoneWADOImageLoader.external.cornerstone = cornerstone;
           cornerstoneWADOImageLoader.external.dicomParser = dicomParser;
 
           cornerstoneWADOImageLoader.configure({
-            useWebWorkers: false, // Disable to avoid 'fs' issues
+            useWebWorkers: false,
             decodeConfig: {
               convertFloatPixelDataToInt: false,
-              use16BitDataType: true
-            }
+              use16BitDataType: true,
+            },
           });
         }
 
         enableElement();
       } catch (error) {
-        console.error('Failed to initialize Cornerstone:', error);
+        console.error("Failed to initialize Cornerstone:", error);
       }
     };
 
@@ -214,7 +327,7 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
         try {
           cornerstone.disable(viewerElement);
         } catch (error) {
-          console.warn('Failed to disable cornerstone element:', error);
+          console.warn("Failed to disable cornerstone element:", error);
         }
       }
 
@@ -235,46 +348,46 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
     };
   }, []);
 
-  const loadImage = useCallback(async (index: number) => {
-    const element = elementRef.current;
-    if (!element || !cornerstone) return;
+  const loadImage = useCallback(
+    async (index: number) => {
+      const element = elementRef.current;
+      if (!element || !cornerstone) return;
 
-    const imageId = imageIds[index];
-    if (!imageId) return;
+      const imageId = imageIds[index];
+      if (!imageId) return;
 
-    try {
-      const image = await cornerstone.loadImage(imageId);
-      cornerstone.displayImage(element, image);
+      try {
+        const image = await cornerstone.loadImage(imageId);
+        cornerstone.displayImage(element, image);
 
-      // Create viewport that fits the image to the element
-      const enabledElement = cornerstone.getEnabledElement(element);
-      const canvas = enabledElement.canvas;
+        const enabledElement = cornerstone.getEnabledElement(element);
+        const canvas = enabledElement.canvas;
 
-      // Calculate scale to fit image in canvas
-      const scaleX = canvas.width / image.width;
-      const scaleY = canvas.height / image.height;
-      const scale = Math.min(scaleX, scaleY);
+        const scaleX = canvas.width / image.width;
+        const scaleY = canvas.height / image.height;
+        const scale = Math.min(scaleX, scaleY);
 
-      const viewport = {
-        scale,
-        translation: { x: 0, y: 0 },
-        voi: {
-          windowCenter: image.windowCenter,
-          windowWidth: image.windowWidth
-        },
-        invert: false,
-        pixelReplication: false,
-        rotation: 0,
-        hflip: false,
-        vflip: false
-      };
+        const viewport = {
+          scale,
+          translation: { x: 0, y: 0 },
+          voi: {
+            windowCenter: image.windowCenter,
+            windowWidth: image.windowWidth,
+          },
+          invert: false,
+          pixelReplication: false,
+          rotation: 0,
+          hflip: false,
+          vflip: false,
+        };
 
-      cornerstone.setViewport(element, viewport);
-
-    } catch (error) {
-      console.error('Failed to load DICOM image:', error);
-    }
-  }, [imageIds]);
+        cornerstone.setViewport(element, viewport);
+      } catch (error) {
+        console.error("Failed to load DICOM image:", error);
+      }
+    },
+    [imageIds]
+  );
 
   useEffect(() => {
     if (isInitialized && imageCount > 0 && elementRef.current) {
@@ -291,239 +404,104 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
   }, [currentImageIndex, imageCount]);
 
   useEffect(() => {
-    if (!isInitialized || typeof window === 'undefined') {
-      return;
-    }
+    if (!cornerstone || imageCount <= 1) return;
 
-    const orientationTimeouts: Array<ReturnType<typeof setTimeout>> = [];
+    const upcoming = [currentImageIndex + 1, currentImageIndex + 2]
+      .map((index) => (index >= imageCount ? index % imageCount : index))
+      .filter((index) => index !== currentImageIndex)
+      .map((index) => imageIds[index]);
 
-    const flushResize = () => {
-      scheduleViewportResize();
-    };
-
-    const debouncedResize = () => {
-      if (resizeTimeoutRef.current) {
-        clearTimeout(resizeTimeoutRef.current);
+    upcoming.forEach((imageId) => {
+      if (imageId) {
+        cornerstone?.loadImage(imageId).catch(() => undefined);
       }
-      resizeTimeoutRef.current = setTimeout(() => {
-        flushResize();
-        resizeTimeoutRef.current = null;
-      }, 150);
-    };
-
-    const handleOrientationChange = () => {
-      orientationTimeouts.push(
-        setTimeout(() => {
-          flushResize();
-        }, 200)
-      );
-      orientationTimeouts.push(
-        setTimeout(() => {
-          flushResize();
-        }, 700)
-      );
-    };
-
-    const mediaQuery = window.matchMedia('(max-width: 768px)');
-    const handleMediaChange = () => {
-      orientationTimeouts.push(
-        setTimeout(() => {
-          flushResize();
-        }, 100)
-      );
-    };
-
-    window.addEventListener('resize', debouncedResize);
-    window.addEventListener('orientationchange', handleOrientationChange);
-    mediaQuery.addEventListener('change', handleMediaChange);
-
-    flushResize();
-
-    return () => {
-      window.removeEventListener('resize', debouncedResize);
-      window.removeEventListener('orientationchange', handleOrientationChange);
-      mediaQuery.removeEventListener('change', handleMediaChange);
-
-      if (resizeTimeoutRef.current) {
-        clearTimeout(resizeTimeoutRef.current);
-        resizeTimeoutRef.current = null;
-      }
-
-      if (resizeFrameRef.current !== null) {
-        cancelAnimationFrame(resizeFrameRef.current);
-        resizeFrameRef.current = null;
-      }
-
-      orientationTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
-    };
-  }, [isInitialized, scheduleViewportResize]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
-
-    const containerElement = containerRef.current;
-    if (!containerElement) {
-      return;
-    }
-
-    const observerTargets: Element[] = [containerElement];
-    if (controlsRef.current) {
-      observerTargets.push(controlsRef.current);
-    }
-
-    const updateViewerHeight = () => {
-      const containerRect = containerRef.current?.getBoundingClientRect();
-      if (!containerRect) {
-        return;
-      }
-
-      const controlsRect = controlsRef.current?.getBoundingClientRect();
-      const availableHeight = containerRect.height - (controlsRect?.height ?? 0);
-      const nextHeight = Math.max(availableHeight, MIN_VIEWER_HEIGHT);
-
-      setViewerAreaHeight(prev => {
-        if (prev === null || Math.abs(prev - nextHeight) > 1) {
-          return nextHeight;
-        }
-        return prev;
-      });
-    };
-
-    updateViewerHeight();
-
-    const resizeObserver = typeof ResizeObserver !== 'undefined'
-      ? new ResizeObserver(() => {
-          updateViewerHeight();
-        })
-      : null;
-
-    if (resizeObserver) {
-      observerTargets.forEach(target => resizeObserver.observe(target));
-    }
-
-    const scheduleHeightUpdate = (delay: number) => {
-      if (heightMeasureTimeoutRef.current) {
-        clearTimeout(heightMeasureTimeoutRef.current);
-      }
-      heightMeasureTimeoutRef.current = setTimeout(() => {
-        updateViewerHeight();
-        heightMeasureTimeoutRef.current = null;
-      }, delay);
-    };
-
-    const handleResize = () => scheduleHeightUpdate(80);
-    const handleOrientationChange = () => scheduleHeightUpdate(250);
-
-    window.addEventListener('resize', handleResize);
-    window.addEventListener('orientationchange', handleOrientationChange);
-
-    return () => {
-      window.removeEventListener('resize', handleResize);
-      window.removeEventListener('orientationchange', handleOrientationChange);
-
-      if (resizeObserver) {
-        resizeObserver.disconnect();
-      }
-
-      if (heightMeasureTimeoutRef.current) {
-        clearTimeout(heightMeasureTimeoutRef.current);
-        heightMeasureTimeoutRef.current = null;
-      }
-    };
-  }, [containerRef, controlsRef]);
-
-  useEffect(() => {
-    if (viewerAreaHeight === null) {
-      return;
-    }
-
-    scheduleViewportResize();
-  }, [viewerAreaHeight, scheduleViewportResize]);
-
-  const nextImage = useCallback(() => {
-    setCurrentImageIndex(prev => {
-      if (imageCount === 0) return 0;
-      return Math.min(prev + 1, imageCount - 1);
     });
-  }, [imageCount]);
-
-  const prevImage = useCallback(() => {
-    setCurrentImageIndex(prev => (prev > 0 ? prev - 1 : 0));
-  }, []);
-
-  const goToImage = useCallback((index: number) => {
-    if (imageCount === 0) return;
-
-    const clampedIndex = Math.max(0, Math.min(index, imageCount - 1));
-    if (clampedIndex !== currentImageIndex) {
-      setCurrentImageIndex(clampedIndex);
-    }
-  }, [imageCount, currentImageIndex]);
+  }, [currentImageIndex, imageCount, imageIds]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
+    if (typeof window === "undefined") return;
 
     const handleKeyPress = (event: KeyboardEvent) => {
       if (isPlayingRef.current) {
         return;
       }
 
-      const totalImages = imageCount;
-      if (totalImages === 0) {
+      const total = imageCount;
+      if (total === 0) {
         return;
       }
 
       switch (event.key) {
-        case 'ArrowLeft':
-        case 'a':
-        case 'A':
+        case "ArrowLeft":
+        case "a":
+        case "A":
           event.preventDefault();
-          prevImage();
+          setCurrentImageIndex((prev) => (prev > 0 ? prev - 1 : 0));
           break;
-        case 'ArrowRight':
-        case 'd':
-        case 'D':
+        case "ArrowRight":
+        case "d":
+        case "D":
           event.preventDefault();
-          nextImage();
+          setCurrentImageIndex((prev) => Math.min(prev + 1, total - 1));
           break;
-        case 'Home':
+        case "Home":
           event.preventDefault();
-          goToImage(0);
+          setCurrentImageIndex(0);
           break;
-        case 'End':
+        case "End":
           event.preventDefault();
-          goToImage(totalImages - 1);
+          setCurrentImageIndex(total - 1);
           break;
-        case ' ':
+        case " ":
           event.preventDefault();
           {
-            const jumpSize = Math.max(1, Math.floor(totalImages / 50));
-            goToImage(Math.min(totalImages - 1, currentIndexRef.current + jumpSize));
+            const jumpSize = Math.max(1, Math.floor(total / 50));
+            setCurrentImageIndex((prev) =>
+              Math.min(total - 1, prev + jumpSize)
+            );
           }
           break;
       }
     };
 
-    document.addEventListener('keydown', handleKeyPress);
+    document.addEventListener("keydown", handleKeyPress);
     return () => {
-      document.removeEventListener('keydown', handleKeyPress);
+      document.removeEventListener("keydown", handleKeyPress);
     };
-  }, [goToImage, imageCount, nextImage, prevImage]);
+  }, [imageCount]);
+
+  const nextImage = useCallback(() => {
+    setCurrentImageIndex((prev) => {
+      if (imageCount === 0) return 0;
+      return Math.min(prev + 1, imageCount - 1);
+    });
+  }, [imageCount]);
+
+  const prevImage = useCallback(() => {
+    setCurrentImageIndex((prev) => (prev > 0 ? prev - 1 : 0));
+  }, []);
+
+  const goToImage = useCallback(
+    (index: number) => {
+      if (imageCount === 0) return;
+
+      const clampedIndex = Math.max(0, Math.min(index, imageCount - 1));
+      if (clampedIndex !== currentImageIndex) {
+        setCurrentImageIndex(clampedIndex);
+      }
+    },
+    [imageCount, currentImageIndex]
+  );
 
   const togglePlayback = () => {
     if (imageCount <= 1) return;
-    setIsPlaying(!isPlaying);
+    setIsPlaying((prev) => !prev);
   };
 
   const changePlaySpeed = (speed: number) => {
     setPlaySpeed(speed);
   };
 
-  // Playback using requestAnimationFrame
   useEffect(() => {
     if (!isPlaying || imageCount <= 1) {
       if (playbackFrameRef.current !== null) {
@@ -540,7 +518,7 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
       if (time - lastFrameTime >= targetInterval) {
         lastFrameTime = time;
         startTransition(() => {
-          setCurrentImageIndex(prev => {
+          setCurrentImageIndex((prev) => {
             const next = prev + 1;
             return next >= imageCount ? 0 : next;
           });
@@ -560,15 +538,46 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
     };
   }, [imageCount, isPlaying, playSpeed, startTransition]);
 
+  const sliderPercentage =
+    imageCount > 0
+      ? Math.round(((currentImageIndex + 1) / imageCount) * 100)
+      : 0;
+  const speedOptions = isMobile ? MOBILE_SPEEDS : DESKTOP_SPEEDS;
+
+  const renderJumpButtons = (className: string) => (
+    <div className={className}>
+      <button
+        type="button"
+        onClick={() => goToImage(0)}
+        disabled={isPlaying || imageCount === 0}
+        className="rounded border border-neutral-700/60 bg-neutral-800/60 px-2 py-1 text-[11px] font-medium text-neutral-200 transition-colors duration-150 hover:bg-neutral-700/60 disabled:cursor-not-allowed disabled:border-neutral-700/30 disabled:bg-neutral-800/30 disabled:text-neutral-500"
+      >
+        First
+      </button>
+      <button
+        type="button"
+        onClick={() => goToImage(Math.floor(imageCount / 2))}
+        disabled={isPlaying || imageCount === 0}
+        className="rounded border border-neutral-700/60 bg-neutral-800/60 px-2 py-1 text-[11px] font-medium text-neutral-200 transition-colors duration-150 hover:bg-neutral-700/60 disabled:cursor-not-allowed disabled:border-neutral-700/30 disabled:bg-neutral-800/30 disabled:text-neutral-500"
+      >
+        Mid
+      </button>
+      <button
+        type="button"
+        onClick={() => goToImage(imageCount - 1)}
+        disabled={isPlaying || imageCount === 0}
+        className="rounded border border-neutral-700/60 bg-neutral-800/60 px-2 py-1 text-[11px] font-medium text-neutral-200 transition-colors duration-150 hover:bg-neutral-700/60 disabled:cursor-not-allowed disabled:border-neutral-700/30 disabled:bg-neutral-800/30 disabled:text-neutral-500"
+      >
+        Last
+      </button>
+    </div>
+  );
+
   return (
-    <div ref={containerRef} className="w-full h-full flex flex-col min-h-0">
-      {/* Image viewer area */}
+    <div ref={containerRef} className="flex h-full min-h-0 w-full flex-col">
       <div
-        className="relative flex-1 bg-black mobile-viewer-height overflow-hidden"
-        style={{
-          height: viewerAreaHeight ?? undefined,
-          minHeight: MIN_VIEWER_HEIGHT
-        }}
+        className="relative flex-1 overflow-hidden rounded-lg bg-black"
+        style={{ minHeight: MIN_VIEWER_HEIGHT }}
       >
         <div
           ref={elementRef}
@@ -576,134 +585,120 @@ export default function DicomViewer({ dicomFiles, seriesName = 'DICOM_Series' }:
           role="img"
           aria-label={viewerLabel}
           style={{
-            touchAction: 'pan-x pan-y pinch-zoom',
-            userSelect: 'none',
-            WebkitUserSelect: 'none',
-            WebkitTouchCallout: 'none'
+            touchAction: "pan-x pan-y pinch-zoom",
+            userSelect: "none",
+            WebkitUserSelect: "none",
+            WebkitTouchCallout: "none",
           }}
         />
       </div>
 
-      {/* Controls area */}
       <div
         ref={controlsRef}
-        className="bg-neutral-900/95 backdrop-blur-sm text-neutral-100 border-t border-neutral-700/50 flex-shrink-0 mobile-controls-height"
+        className="flex-shrink-0 border-t border-neutral-800 bg-neutral-900/90 backdrop-blur"
       >
         <div className="pb-safe">
-          <div className="p-2 space-y-2">
-          {/* Top row: Controls and counter */}
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-1">
-              <button
-                onClick={prevImage}
-                disabled={currentImageIndex === 0 || isPlaying || imageCount === 0}
-                className="flex items-center justify-center w-8 h-8 bg-neutral-800/70 hover:bg-neutral-700 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 rounded-l border border-r-0 border-neutral-700/50 touch-manipulation"
-              >
-                <SkipBack size={14} />
-              </button>
+          <div className="flex flex-col gap-2 px-3 py-2 md:gap-3 md:px-4 md:py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 md:flex-nowrap md:gap-3">
+              <div className="flex items-center gap-1 md:gap-2">
+                <button
+                  type="button"
+                  onClick={prevImage}
+                  disabled={
+                    currentImageIndex === 0 || isPlaying || imageCount === 0
+                  }
+                  className="flex h-9 w-9 items-center justify-center rounded border border-neutral-700/50 bg-neutral-800/70 text-neutral-100 transition-colors duration-150 hover:bg-neutral-700 disabled:cursor-not-allowed disabled:border-neutral-700/30 disabled:bg-neutral-800/30 disabled:text-neutral-500 md:h-10 md:w-10"
+                  aria-label="Previous image"
+                >
+                  <SkipBack size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={togglePlayback}
+                  disabled={imageCount <= 1}
+                  className={`flex h-9 w-10 items-center justify-center rounded border transition-colors duration-150 md:h-10 md:w-12 ${
+                    imageCount <= 1
+                      ? "cursor-not-allowed border-neutral-700/30 bg-neutral-800/30 text-neutral-500"
+                      : "border-neutral-600/50 bg-neutral-700/80 text-neutral-100 hover:bg-neutral-600"
+                  }`}
+                  aria-label={isPlaying ? "Pause playback" : "Start playback"}
+                >
+                  {isPlaying ? <Pause size={16} /> : <Play size={16} />}
+                </button>
+                <button
+                  type="button"
+                  onClick={nextImage}
+                  disabled={
+                    currentImageIndex === imageCount - 1 ||
+                    isPlaying ||
+                    imageCount === 0
+                  }
+                  className="flex h-9 w-9 items-center justify-center rounded border border-neutral-700/50 bg-neutral-800/70 text-neutral-100 transition-colors duration-150 hover:bg-neutral-700 disabled:cursor-not-allowed disabled:border-neutral-700/30 disabled:bg-neutral-800/30 disabled:text-neutral-500 md:h-10 md:w-10"
+                  aria-label="Next image"
+                >
+                  <SkipForward size={16} />
+                </button>
+              </div>
 
-              <button
-                onClick={togglePlayback}
-                disabled={imageCount <= 1}
-                className={`flex items-center justify-center w-10 h-8 border transition-all duration-200 touch-manipulation ${
-                  imageCount <= 1
-                    ? 'bg-neutral-800/30 text-neutral-500 border-neutral-700/50 cursor-not-allowed'
-                    : 'bg-neutral-700/70 hover:bg-neutral-600 border-neutral-600/50'
-                }`}
-              >
-                {isPlaying ? <Pause size={14} /> : <Play size={14} />}
-              </button>
-
-              <button
-                onClick={nextImage}
-                disabled={currentImageIndex === imageCount - 1 || isPlaying || imageCount === 0}
-                className="flex items-center justify-center w-8 h-8 bg-neutral-800/70 hover:bg-neutral-700 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 rounded-r border border-l-0 border-neutral-700/50 touch-manipulation"
-              >
-                <SkipForward size={14} />
-              </button>
+              <div className="flex items-end gap-2 text-right text-xs text-neutral-400">
+                <div className="text-sm font-medium text-neutral-100">
+                  {imageCount === 0
+                    ? "0/0"
+                    : `${currentImageIndex + 1}/${imageCount}`}
+                </div>
+                <div>{sliderPercentage}%</div>
+              </div>
             </div>
 
-            <div className="text-center flex-shrink-0 ml-3">
-              <div className="text-sm font-medium text-neutral-200">
-                {imageCount === 0 ? '0/0' : `${currentImageIndex + 1}/${imageCount}`}
-              </div>
-              <div className="text-xs text-neutral-400">
-                {imageCount > 0 ? Math.round(((currentImageIndex + 1) / imageCount) * 100) : 0}%
-              </div>
-            </div>
-          </div>
-
-          <div className="w-full mb-1">
-            <input
-              type="range"
-              min="0"
-              max={Math.max(0, imageCount - 1)}
-              value={currentImageIndex}
-              onChange={(e) => {
-                if (!isPlaying) {
-                  const newIndex = parseInt(e.target.value);
-                  if (newIndex !== currentImageIndex) {
+            <div className="flex flex-col gap-2 md:flex-row md:items-center md:gap-4">
+              <input
+                type="range"
+                min="0"
+                max={Math.max(0, imageCount - 1)}
+                value={currentImageIndex}
+                onChange={(event) => {
+                  if (isPlaying) return;
+                  const newIndex = parseInt(event.target.value, 10);
+                  if (!Number.isNaN(newIndex)) {
                     goToImage(newIndex);
                   }
-                }
-              }}
-              disabled={isPlaying || imageCount === 0}
-              className="w-full h-1 bg-neutral-800/50 rounded-lg appearance-none cursor-pointer slider-optimized"
-              style={{
-                background:
-                  imageCount > 0
-                    ? `linear-gradient(to right, #525252 0%, #525252 ${((currentImageIndex + 1) / imageCount) * 100}%, #404040 ${((currentImageIndex + 1) / imageCount) * 100}%, #404040 100%)`
-                    : undefined
-              }}
-            />
-          </div>
+                }}
+                disabled={isPlaying || imageCount === 0}
+                aria-label="Image scrubber"
+                className="slider w-full appearance-none bg-transparent"
+                style={{
+                  height: 16,
+                  background:
+                    imageCount > 0
+                      ? `linear-gradient(to right, #6b7280 0%, #6b7280 ${sliderPercentage}%, #404040 ${sliderPercentage}%, #404040 100%)`
+                      : undefined,
+                }}
+              />
+              {renderJumpButtons("hidden gap-1 md:flex")}
+            </div>
 
-          {/* Bottom row: Speed and jump buttons */}
-          <div className="overflow-x-auto scrollbar-hide">
-            <div className="flex items-center justify-between min-w-max gap-2">
-              <div className="flex items-center gap-1">
-                <span className="text-xs text-neutral-500 flex-shrink-0">Speed:</span>
-                {[0.5, 1, 2, 5, 10].map(speed => (
+            <div className="flex flex-wrap items-center justify-between gap-2 md:gap-3">
+              <div className="flex flex-1 items-center gap-1 overflow-x-auto scrollbar-hide">
+                <span className="text-xs text-neutral-500">Speed:</span>
+                {speedOptions.map((speed) => (
                   <button
                     key={speed}
+                    type="button"
                     onClick={() => changePlaySpeed(speed)}
-                    className={`px-2 py-1 text-xs rounded transition-all duration-200 touch-manipulation ${
+                    className={`whitespace-nowrap rounded px-2 py-1 text-xs font-medium transition-colors duration-150 ${
                       playSpeed === speed
-                        ? 'bg-neutral-600/80 text-white'
-                        : 'bg-neutral-800/50 text-neutral-400 hover:bg-neutral-700/50'
+                        ? "bg-neutral-600 text-white"
+                        : "bg-neutral-800/60 text-neutral-300 hover:bg-neutral-700/70"
                     }`}
+                    aria-pressed={playSpeed === speed}
                   >
                     {speed}x
                   </button>
                 ))}
               </div>
-
-              <div className="flex gap-1">
-                <button
-                  onClick={() => goToImage(0)}
-                  disabled={isPlaying || imageCount === 0}
-                  className="px-2 py-1 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 touch-manipulation"
-                >
-                  First
-                </button>
-                <button
-                  onClick={() => goToImage(Math.floor(imageCount / 2))}
-                  disabled={isPlaying || imageCount === 0}
-                  className="px-2 py-1 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 touch-manipulation"
-                >
-                  Mid
-                </button>
-                <button
-                  onClick={() => goToImage(imageCount - 1)}
-                  disabled={isPlaying || imageCount === 0}
-                  className="px-2 py-1 bg-neutral-800/50 text-neutral-300 rounded text-xs hover:bg-neutral-700/50 disabled:bg-neutral-800/30 disabled:cursor-not-allowed transition-all duration-200 touch-manipulation"
-                >
-                  Last
-                </button>
-              </div>
+              {renderJumpButtons("flex gap-1 md:hidden")}
             </div>
           </div>
-        </div>
         </div>
       </div>
     </div>
